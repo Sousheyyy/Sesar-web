@@ -1,0 +1,407 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+  previewFeatures = ["driverAdapters"] // <--- ADD THIS LINE
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum UserRole {
+  CREATOR
+  ARTIST
+  ADMIN
+}
+
+enum Tier {
+  D
+  C
+  B
+  A
+  S
+}
+
+enum CampaignStatus {
+  PENDING_APPROVAL
+  ACTIVE
+  PAUSED
+  COMPLETED
+  REJECTED
+  CANCELLED
+}
+
+enum PayoutStatus {
+  PENDING
+  COMPLETED
+}
+
+enum SubmissionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum TransactionType {
+  DEPOSIT
+  WITHDRAWAL
+  EARNING
+  SPEND
+  REFUND
+}
+
+enum TransactionStatus {
+  PENDING
+  COMPLETED
+  REJECTED
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  password      String
+  name          String?
+  bio           String?   @db.Text
+  avatar        String?
+  
+  role          UserRole  @default(CREATOR)
+  balance       Decimal   @default(0) @db.Decimal(10, 2)
+  
+  // Creator Tier (based on followers)
+  creatorTier   Tier?     // D: <1k, C: 1k-3k, B: 3k-5k, A: 5k-10k, S: 10k+
+  followerCount Int       @default(0)
+  followingCount Int      @default(0) // ADDED
+  totalLikes    Int       @default(0) // ADDED
+  videoCount    Int       @default(0) // ADDED
+  lastStatsFetchedAt DateTime?        // ADDED
+  
+  // Social links
+  tiktokHandle  String?
+  instagramHandle String?
+  youtubeHandle String?
+  
+  // Subscription
+  plan          UserPlan  @default(FREE)
+  subscriptionEndsAt DateTime?
+  cycleStartDate DateTime @default(now()) // For free plan limits
+  
+  // Marketplace
+  couponBalance Int       @default(0)
+  usages        MarketplaceUsage[]
+  
+  // Metadata
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  lastLoginAt   DateTime?
+  
+  // Relations
+  songs         Song[]
+  campaigns     Campaign[]
+  submissions   Submission[]
+  transactions  Transaction[]
+  notifications Notification[]
+  
+  @@index([email])
+  @@index([role])
+  @@index([creatorTier])
+}
+
+model Song {
+  id          String   @id @default(cuid())
+  title       String
+  artist      User     @relation(fields: [artistId], references: [id], onDelete: Cascade)
+  artistId    String
+  
+  // TikTok link (optional for backward compatibility with existing data)
+  tiktokUrl   String?
+  duration    Int      // in seconds
+  
+  // Metadata
+  coverImage  String?
+  description String?  @db.Text
+  
+  // New TikTok Statistics (from /public/music/info)
+  tiktokMusicId    String?   // TikTok's internal music ID
+  videoCount       Int?      // Number of videos using this music
+  authorName       String?   // Original artist name from TikTok
+  
+  // Cache metadata
+  statsLastFetched DateTime? // When stats were last updated
+  
+  // Timestamps
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Relations
+  campaigns   Campaign[]
+  
+  @@index([artistId])
+  @@index([tiktokMusicId])
+  @@index([title])
+  @@index([authorName])
+}
+
+model Campaign {
+  id              String         @id @default(cuid())
+  song            Song           @relation(fields: [songId], references: [id], onDelete: Cascade)
+  songId          String
+  artist          User           @relation(fields: [artistId], references: [id], onDelete: Cascade)
+  artistId        String
+  
+  // Budget & Pricing
+  totalBudget     Decimal        @db.Decimal(10, 2)
+  remainingBudget Decimal        @db.Decimal(10, 2)
+  
+  // Tier System (based on budget)
+  tier            Tier           @default(C) // C: 15-30k, B: 30-60k, A: 60-100k, S: 100k+
+  
+  // Payout System
+  platformFeePercent    Int      @default(20)  // Platform service fee percentage
+  safetyReservePercent  Int      @default(5)   // Safety reserve percentage
+  payoutStatus          PayoutStatus @default(PENDING)
+  
+  // Requirements (auto-calculated from tier)
+  minFollowers    Int            @default(0)
+  minVideoDuration Int?          // in seconds
+  maxSubmissions  Int            @default(100)
+  
+  // Campaign details
+  title           String
+  description     String?        @db.Text
+  status          CampaignStatus @default(PENDING_APPROVAL)
+  
+  // Timestamps
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  startDate       DateTime       @default(now()) // Campaign start date
+  endDate         DateTime       // Campaign end date
+  completedAt     DateTime?
+
+  // NEW: Campaign Limits & Targeting
+  targetTiers     Tier[]         @default([])   // Empty means ALL tiers allowed
+  isProOnly       Boolean        @default(false)
+  maxParticipants Int            @default(100)  // Soft limit calculated from budget
+  
+  // NEW: Computed fields for backend calculations
+  totalCampaignPoints Float        @default(0)  // Sum of all submission points
+  netBudgetTP         Float        @default(0)  // Budget after fees in TP
+  netMultiplier       Float        @default(0)  // (100 - platformFee - safetyReserve) / 100
+  
+  // Relations
+  submissions     Submission[]
+  poolStats       CampaignPoolStats?
+  
+  @@index([songId])
+  @@index([artistId])
+  @@index([status])
+  @@index([createdAt])
+  @@index([startDate])
+  @@index([endDate])
+  @@index([payoutStatus])
+  @@index([tier])
+  @@index([status, endDate]) // For filtering active/completed campaigns
+  @@index([artistId, createdAt(sort: Desc)]) // For getMyCampaigns optimization
+  @@index([title]) // For search optimization
+}
+
+model Submission {
+  id              String           @id @default(cuid())
+  campaign        Campaign         @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  campaignId      String
+  creator         User             @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+  creatorId       String
+  
+  // TikTok video info
+  tiktokUrl       String
+  tiktokVideoId   String?
+  
+  // Verification data
+  verified        Boolean          @default(false)
+  verifiedAt      DateTime?
+  rejectionReason String?          @db.Text
+  
+  // Performance metrics
+  lastViewCount   Int              @default(0)
+  lastLikeCount   Int              @default(0)
+  lastCommentCount Int             @default(0)
+  lastShareCount  Int              @default(0)  // Shares metric for payout
+  totalEarnings   Decimal          @default(0) @db.Decimal(10, 2)
+  
+  // Payout calculation fields
+  impactScore     Float?           // Calculated at payout time
+  payoutAmount    Decimal?         @db.Decimal(10, 2) // Final calculated payout
+  estimatedEarnings Decimal          @default(0) @db.Decimal(10, 2)
+  contributionPercent Float          @default(0)
+  
+  // NEW: Computed fields for backend calculations
+  viewPoints      Float            @default(0)  // views * 0.01
+  likePoints      Float            @default(0)  // likes * 0.5
+  sharePoints     Float            @default(0)  // shares * 1.0
+  totalPoints     Float            @default(0)  // sum of all points
+  sharePercent    Float            @default(0)  // percentage of campaign pool (max 40%)
+  
+  // Status
+  status          SubmissionStatus @default(PENDING)
+  
+  // Metadata
+  creatorFollowers Int?
+  videoDuration   Int?             // in seconds
+  
+  // Timestamps
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  lastCheckedAt   DateTime?        // Last time views were updated
+  
+  @@unique([campaignId, creatorId]) // One submission per creator per campaign
+  @@index([campaignId])
+  @@index([creatorId])
+  @@index([status])
+  @@index([createdAt])
+  @@index([campaignId, status]) // For efficient filtering
+  @@index([campaignId, creatorId]) // For joined campaigns optimization
+  @@index([creatorId, createdAt(sort: Desc)]) // For user submission history
+  @@index([creatorId, status]) // For active video counts and status filtering
+}
+
+model CampaignPoolStats {
+  id                    String   @id @default(cuid())
+  campaign              Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  campaignId            String   @unique
+  
+  // Aggregated statistics
+  totalCampaignPoints   Float    @default(0)  // Sum of all approved submission points
+  totalSubmissions      Int      @default(0)  // Count of approved submissions
+  averagePoints         Float    @default(0)  // Average points per submission
+  
+  // Timestamps
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  
+  @@index([campaignId])
+}
+
+model Transaction {
+  id              String            @id @default(cuid())
+  user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId          String
+  
+  // Transaction details
+  type            TransactionType
+  amount          Decimal           @db.Decimal(10, 2)
+  status          TransactionStatus @default(PENDING)
+  
+  // Additional info
+  description     String?           @db.Text
+  reference       String?           // Bank reference or submission ID
+  notes           String?           @db.Text // Admin notes
+  
+  // For deposits/withdrawals
+  bankDetails     String?           @db.Text
+  
+  // Approval
+  approvedBy      String?           // Admin user ID
+  approvedAt      DateTime?
+  
+  // Timestamps
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  
+  @@index([userId])
+  @@index([type])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model Notification {
+  id          String   @id @default(cuid())
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId      String
+  
+  // Notification content
+  title       String
+  message     String   @db.Text
+  link        String?  // Optional link to related resource
+  
+  // Status
+  read        Boolean  @default(false)
+  
+  // Timestamps
+  createdAt   DateTime @default(now())
+  
+  @@index([userId])
+  @@index([read])
+  @@index([createdAt])
+}
+
+model SystemSettings {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  value       String   @db.Text
+  description String?  @db.Text
+  
+  // Timestamps
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@index([key])
+}
+
+model MusicCache {
+  id            String   @id @default(cuid())
+  tiktokMusicId String
+  cacheType     String   // "trending_videos" or "music_info"
+  data          Json     // Cached API response
+  expiresAt     DateTime
+  createdAt     DateTime @default(now())
+  
+  @@index([tiktokMusicId, cacheType])
+  @@index([expiresAt])
+}
+
+model ApiCallLog {
+  id        String   @id @default(cuid())
+  endpoint  String   // e.g., "/api/campaigns", "/api/submissions"
+  method    String   // GET, POST, PUT, DELETE, etc.
+  statusCode Int?    // HTTP status code
+  userId    String?  // User who made the call (if authenticated)
+  duration  Int?     // Response time in milliseconds
+  createdAt DateTime @default(now())
+  
+  @@index([endpoint])
+  @@index([userId])
+  @@index([createdAt])
+  @@index([method])
+}
+
+enum UserPlan {
+  FREE
+  PRO
+  ARTIST
+}
+
+enum MarketplaceToolType {
+  PROFILE
+  HASHTAG
+  VALUATION
+  AUDIT
+  COMPARE
+}
+
+model MarketplaceUsage {
+  id              String             @id @default(cuid())
+  user            User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId          String
+  
+  toolType        MarketplaceToolType
+  input           String             // e.g., username, video URL
+  resultSnapshot  Json               // Store full analysis result for history
+  
+  createdAt       DateTime           @default(now())
+  
+  @@index([userId])
+  @@index([toolType])
+}

@@ -1,0 +1,5 @@
+-- AlterTable
+ALTER TABLE "User" ADD COLUMN     "followingCount" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN     "lastStatsFetchedAt" TIMESTAMP(3),
+ADD COLUMN     "totalLikes" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN     "videoCount" INTEGER NOT NULL DEFAULT 0;
