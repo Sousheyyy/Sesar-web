@@ -51,18 +51,22 @@ export default function LoginPage() {
                 const profile = await profileResponse.json();
                 if (profile?.role === UserRole.ADMIN) {
                   window.location.href = "/admin/analytics";
+                } else if (profile?.role === UserRole.ARTIST) {
+                  window.location.href = "/artist/campaigns";
                 } else {
-                  window.location.href = "/dashboard";
+                  // CREATOR role - redirect to profile or wallet
+                  window.location.href = "/profile";
                 }
               } else {
-                window.location.href = "/dashboard";
+                // Fallback if profile fetch fails
+                window.location.href = "/profile";
               }
             } else {
-              window.location.href = "/dashboard";
+              window.location.href = "/profile";
             }
           } catch (sessionError) {
             console.error("Failed to fetch session:", sessionError);
-            window.location.href = "/dashboard";
+            window.location.href = "/profile";
           }
         }, 100);
       }
