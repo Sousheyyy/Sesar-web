@@ -17,7 +17,7 @@ import { randomUUID } from 'crypto';
 import { insightIQClient } from '@/lib/insightiq/client';
 
 // TikTok platform ID (hardcoded fallback if API fetch fails)
-const TIKTOK_PLATFORM_ID_FALLBACK = "9bb8913b-ddd9-430b-a66a-d74d846e6c66";
+const TIKTOK_PLATFORM_ID_FALLBACK = "de55aeec-0dc8-4119-bf90-16b3d1f0c987";
 
 // Cache for TikTok platform ID
 let cachedTikTokPlatformId: string | null = null;

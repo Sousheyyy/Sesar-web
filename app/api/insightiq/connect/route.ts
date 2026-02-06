@@ -28,7 +28,7 @@ async function getTikTokPlatformId(): Promise<string> {
     const authHeader = `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`;
     const res = await fetch(`${baseUrl}/v1/work-platforms`, {
       headers: { Authorization: authHeader },
-      next: { revalidate: 3600 }, // Cache for 1 hour
+      cache: 'no-store', // Don't cache - always fetch fresh
     });
 
     if (!res.ok) {
@@ -162,7 +162,15 @@ export async function GET(request: NextRequest) {
       workPlatformId: "${workPlatformId}"
     };
 
-    console.log("[InsightIQ] Initializing SDK with config:", { ...config, token: config.token.substring(0, 20) + "..." });
+    console.log("[InsightIQ] Initializing SDK with config:", {
+      ...config,
+      token: config.token.substring(0, 20) + "...",
+      workPlatformId: config.workPlatformId
+    });
+    console.log("[InsightIQ] TikTok Platform ID being used:", config.workPlatformId);
+
+    // Display platform ID for debugging
+    document.getElementById("status").textContent = "Platform: " + config.workPlatformId.substring(0, 8) + "...";
 
     function showError(message) {
       document.getElementById("spinner").style.display = "none";
@@ -205,9 +213,12 @@ export async function GET(request: NextRequest) {
 </html>
   `;
 
+  console.log("[InsightIQ Connect] Using workPlatformId:", workPlatformId);
+
   return new NextResponse(html, {
     headers: {
       "Content-Type": "text/html",
+      "Cache-Control": "no-store, no-cache, must-revalidate",
     },
   });
 }
