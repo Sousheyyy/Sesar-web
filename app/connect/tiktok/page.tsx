@@ -10,11 +10,11 @@ function TikTokConnectContent() {
     const [message, setMessage] = useState("SDK yükleniyor...");
     const [sdkLoaded, setSdkLoaded] = useState(false);
 
-    const token = searchParams.get("token");
-    const userId = searchParams.get("user_id");
-    const redirectUrl = searchParams.get("redirect_url");
-    const workPlatformId = searchParams.get("work_platform_id");
-    const environment = searchParams.get("environment") || "staging";
+    const token = searchParams?.get("token") ?? null;
+    const userId = searchParams?.get("user_id") ?? null;
+    const redirectUrl = searchParams?.get("redirect_url") ?? null;
+    const workPlatformId = searchParams?.get("work_platform_id") ?? null;
+    const environment = searchParams?.get("environment") || "staging";
 
     useEffect(() => {
         if (!sdkLoaded || !token || !userId) return;
