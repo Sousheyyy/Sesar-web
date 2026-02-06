@@ -2381,7 +2381,41 @@ export const appRouter = t.router({
 
     const authHeader = `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`;
 
-    // Create InsightIQ user (InsightIQ handles deduplication by name)
+    // Helper function to create SDK token
+    const createSdkToken = async (insightiqUserId: string) => {
+      const tokenRes = await fetch(`${INSIGHTIQ_BASE_URL}/v1/sdk-tokens`, {
+        method: "POST",
+        headers: {
+          Authorization: authHeader,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          user_id: insightiqUserId,
+          products: ["IDENTITY", "IDENTITY.AUDIENCE", "ENGAGEMENT", "ENGAGEMENT.AUDIENCE", "INCOME"],
+        }),
+      });
+      if (!tokenRes.ok) {
+        const errText = await tokenRes.text();
+        console.error("InsightIQ token creation failed:", errText);
+        throw new Error("Failed to create InsightIQ token");
+      }
+      const tokenData = await tokenRes.json();
+      return { token: tokenData.sdk_token as string };
+    };
+
+    // Step 1: Try to get existing user first (handles reconnect case)
+    const existingUserRes = await fetch(`${INSIGHTIQ_BASE_URL}/v1/users/external_id/${userId}`, {
+      headers: { Authorization: authHeader },
+    });
+
+    if (existingUserRes.ok) {
+      const existingUser = await existingUserRes.json();
+      console.log("InsightIQ user exists, creating token for:", existingUser.id);
+      return createSdkToken(existingUser.id);
+    }
+
+    // Step 2: User doesn't exist, create new one
+    console.log("InsightIQ user not found, creating new user...");
     const createRes = await fetch(`${INSIGHTIQ_BASE_URL}/v1/users`, {
       method: "POST",
       headers: {
@@ -2395,30 +2429,15 @@ export const appRouter = t.router({
       const errorText = await createRes.text();
       console.error("InsightIQ user creation failed:", createRes.status, errorText);
 
-      // If user already exists (409), try to get existing user
-      if (createRes.status === 409) {
-        console.log("InsightIQ user already exists, fetching existing user...");
-        const listRes = await fetch(`${INSIGHTIQ_BASE_URL}/v1/users/external_id/${userId}`, {
+      // Handle race condition: user was created between our check and create
+      if (errorText.includes("user_exists_with_external_id") || createRes.status === 409) {
+        console.log("InsightIQ user was created concurrently, fetching...");
+        const retryRes = await fetch(`${INSIGHTIQ_BASE_URL}/v1/users/external_id/${userId}`, {
           headers: { Authorization: authHeader },
         });
-        if (listRes.ok) {
-          const existingUser = await listRes.json();
-          // Continue with existing user
-          const tokenRes = await fetch(`${INSIGHTIQ_BASE_URL}/v1/sdk-tokens`, {
-            method: "POST",
-            headers: {
-              Authorization: authHeader,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              user_id: existingUser.id,
-              products: ["IDENTITY", "IDENTITY.AUDIENCE", "ENGAGEMENT", "ENGAGEMENT.AUDIENCE", "INCOME"],
-            }),
-          });
-          if (tokenRes.ok) {
-            const tokenData = await tokenRes.json();
-            return { token: tokenData.sdk_token as string };
-          }
+        if (retryRes.ok) {
+          const user = await retryRes.json();
+          return createSdkToken(user.id);
         }
       }
 
@@ -2427,27 +2446,9 @@ export const appRouter = t.router({
 
     const created = await createRes.json();
     const insightiqUserId = created.id;
+    console.log("InsightIQ user created:", insightiqUserId);
 
-    // Issue SDK token
-    const tokenRes = await fetch(`${INSIGHTIQ_BASE_URL}/v1/sdk-tokens`, {
-      method: "POST",
-      headers: {
-        Authorization: authHeader,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        user_id: insightiqUserId,
-        products: ["IDENTITY", "IDENTITY.AUDIENCE", "ENGAGEMENT", "ENGAGEMENT.AUDIENCE", "INCOME"],
-      }),
-    });
-
-    if (!tokenRes.ok) {
-      console.error("InsightIQ token creation failed:", await tokenRes.text());
-      throw new Error("Failed to create InsightIQ token");
-    }
-
-    const tokenData = await tokenRes.json();
-    return { token: tokenData.sdk_token as string };
+    return createSdkToken(insightiqUserId);
   }),
 
   // Link InsightIQ account after successful connect flow
