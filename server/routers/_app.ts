@@ -2382,7 +2382,7 @@ export const appRouter = t.router({
     const authHeader = `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`;
 
     // Create InsightIQ user (InsightIQ handles deduplication by name)
-    const createRes = await fetch(`${INSIGHTIQ_BASE_URL}/users`, {
+    const createRes = await fetch(`${INSIGHTIQ_BASE_URL}/v1/users`, {
       method: "POST",
       headers: {
         Authorization: authHeader,
@@ -2398,7 +2398,7 @@ export const appRouter = t.router({
       // If user already exists (409), try to get existing user
       if (createRes.status === 409) {
         console.log("InsightIQ user already exists, fetching existing user...");
-        const listRes = await fetch(`${INSIGHTIQ_BASE_URL}/users?name=${userId}`, {
+        const listRes = await fetch(`${INSIGHTIQ_BASE_URL}/v1/users?name=${userId}`, {
           headers: { Authorization: authHeader },
         });
         if (listRes.ok) {
@@ -2406,7 +2406,7 @@ export const appRouter = t.router({
           if (users.data && users.data.length > 0) {
             const existingUser = users.data[0];
             // Continue with existing user
-            const tokenRes = await fetch(`${INSIGHTIQ_BASE_URL}/sdk-tokens`, {
+            const tokenRes = await fetch(`${INSIGHTIQ_BASE_URL}/v1/sdk-tokens`, {
               method: "POST",
               headers: {
                 Authorization: authHeader,
@@ -2432,7 +2432,7 @@ export const appRouter = t.router({
     const insightiqUserId = created.id;
 
     // Issue SDK token
-    const tokenRes = await fetch(`${INSIGHTIQ_BASE_URL}/sdk-tokens`, {
+    const tokenRes = await fetch(`${INSIGHTIQ_BASE_URL}/v1/sdk-tokens`, {
       method: "POST",
       headers: {
         Authorization: authHeader,
@@ -2473,7 +2473,7 @@ export const appRouter = t.router({
       const authHeader = `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`;
 
       // Fetch account from InsightIQ
-      const accountRes = await fetch(`${INSIGHTIQ_BASE_URL}/accounts/${input.accountId}`, {
+      const accountRes = await fetch(`${INSIGHTIQ_BASE_URL}/v1/accounts/${input.accountId}`, {
         headers: {
           Authorization: authHeader,
           "Content-Type": "application/json",
@@ -2534,7 +2534,7 @@ export const appRouter = t.router({
 
         if (clientId && clientSecret) {
           const authHeader = `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`;
-          await fetch(`${INSIGHTIQ_BASE_URL}/accounts/${currentUser.tiktokUserId}`, {
+          await fetch(`${INSIGHTIQ_BASE_URL}/v1/accounts/${currentUser.tiktokUserId}`, {
             method: "DELETE",
             headers: { Authorization: authHeader },
           });
