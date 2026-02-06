@@ -12,12 +12,16 @@ import { NextRequest, NextResponse } from "next/server";
  * - redirectUrl: URL to redirect after connection (mobile deep link)
  * - workPlatformId: (optional) TikTok platform ID to skip platform selection
  */
+// TikTok work platform ID from InsightIQ
+const TIKTOK_WORK_PLATFORM_ID = "9bb8913b-ddd9-430b-a66a-d74d846e6c66";
+
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const token = searchParams.get("token");
   const userId = searchParams.get("userId");
   const redirectUrl = searchParams.get("redirectUrl");
-  const workPlatformId = searchParams.get("workPlatformId") || "";
+  // Always use TikTok platform ID to skip platform selection
+  const workPlatformId = searchParams.get("workPlatformId") || TIKTOK_WORK_PLATFORM_ID;
 
   if (!token || !userId || !redirectUrl) {
     return NextResponse.json(
@@ -112,7 +116,7 @@ export async function GET(request: NextRequest) {
       redirect: true,
       redirectURL: "${redirectUrl}",
       singleAccount: true,
-      ${workPlatformId ? `workPlatformId: "${workPlatformId}",` : ""}
+      workPlatformId: "${workPlatformId}"
     };
 
     console.log("[InsightIQ] Initializing SDK with config:", { ...config, token: config.token.substring(0, 20) + "..." });
