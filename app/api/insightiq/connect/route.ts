@@ -12,16 +12,59 @@ import { NextRequest, NextResponse } from "next/server";
  * - redirectUrl: URL to redirect after connection (mobile deep link)
  * - workPlatformId: (optional) TikTok platform ID to skip platform selection
  */
-// TikTok work platform ID from InsightIQ
-const TIKTOK_WORK_PLATFORM_ID = "9bb8913b-ddd9-430b-a66a-d74d846e6c66";
+
+// Fetch TikTok platform ID from InsightIQ API
+async function getTikTokPlatformId(): Promise<string> {
+  const baseUrl = process.env.INSIGHTIQ_BASE_URL || "https://api.staging.insightiq.ai";
+  const clientId = process.env.INSIGHTIQ_CLIENT_ID;
+  const clientSecret = process.env.INSIGHTIQ_CLIENT_SECRET;
+
+  if (!clientId || !clientSecret) {
+    console.error("Missing InsightIQ credentials");
+    return "9bb8913b-ddd9-430b-a66a-d74d846e6c66"; // fallback
+  }
+
+  try {
+    const authHeader = `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`;
+    const res = await fetch(`${baseUrl}/v1/work-platforms`, {
+      headers: { Authorization: authHeader },
+      next: { revalidate: 3600 }, // Cache for 1 hour
+    });
+
+    if (!res.ok) {
+      console.error("Failed to fetch work platforms:", res.status);
+      return "9bb8913b-ddd9-430b-a66a-d74d846e6c66"; // fallback
+    }
+
+    const data = await res.json();
+    console.log("[InsightIQ] Work platforms:", JSON.stringify(data.data?.map((p: any) => ({ id: p.id, name: p.name })), null, 2));
+
+    const tiktok = data.data?.find((p: any) =>
+      p.name.toLowerCase() === "tiktok" || p.name.toLowerCase().includes("tiktok")
+    );
+
+    if (tiktok) {
+      console.log("[InsightIQ] Found TikTok platform:", tiktok.id, tiktok.name);
+      return tiktok.id;
+    }
+
+    console.warn("[InsightIQ] TikTok platform not found in list");
+    return "9bb8913b-ddd9-430b-a66a-d74d846e6c66"; // fallback
+  } catch (err) {
+    console.error("[InsightIQ] Error fetching platforms:", err);
+    return "9bb8913b-ddd9-430b-a66a-d74d846e6c66"; // fallback
+  }
+}
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const token = searchParams.get("token");
   const userId = searchParams.get("userId");
   const redirectUrl = searchParams.get("redirectUrl");
-  // Always use TikTok platform ID to skip platform selection
-  const workPlatformId = searchParams.get("workPlatformId") || TIKTOK_WORK_PLATFORM_ID;
+
+  // Get the correct TikTok platform ID from InsightIQ API
+  const tiktokPlatformId = await getTikTokPlatformId();
+  const workPlatformId = searchParams.get("workPlatformId") || tiktokPlatformId;
 
   if (!token || !userId || !redirectUrl) {
     return NextResponse.json(
