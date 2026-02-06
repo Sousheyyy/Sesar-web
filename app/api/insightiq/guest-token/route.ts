@@ -19,7 +19,7 @@ import { insightIQClient } from '@/lib/insightiq/client';
 // Cache for TikTok platform ID
 let cachedTikTokPlatformId: string | null = null;
 
-export async function POST(req: NextRequest) {
+export async function POST(_req: NextRequest) {
     try {
         console.log('[InsightIQ Guest] Creating guest token for TikTok signup...');
 
