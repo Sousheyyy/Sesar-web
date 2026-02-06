@@ -4,18 +4,6 @@ import { useSearchParams } from "next/navigation";
 import { useEffect, useState, Suspense } from "react";
 import Script from "next/script";
 
-declare global {
-    interface Window {
-        PhylloConnect: {
-            initialize: (config: any) => {
-                open: () => void;
-                on: (event: string, callback: (...args: any[]) => void) => void;
-            };
-            version: () => { connect_web_sdk_version: string };
-        };
-    }
-}
-
 function TikTokConnectContent() {
     const searchParams = useSearchParams();
     const [status, setStatus] = useState<"loading" | "connecting" | "success" | "error">("loading");
@@ -50,7 +38,7 @@ function TikTokConnectContent() {
 
             console.log("[TikTok Connect] Initializing SDK with config:", { ...config, token: "***" });
 
-            const phylloConnect = window.PhylloConnect.initialize(config);
+            const phylloConnect = (window as any).PhylloConnect.initialize(config);
 
             phylloConnect.on("accountConnected", (accountId: string, workplatformId: string, usrId: string) => {
                 console.log(`[TikTok Connect] Account connected: ${accountId}`);
