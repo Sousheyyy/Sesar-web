@@ -2502,16 +2502,20 @@ export const appRouter = t.router({
       }
 
       const account = await accountRes.json();
-      const handle: string | undefined = account.platform_username;
+      console.log("InsightIQ account data:", JSON.stringify(account, null, 2));
+
+      // InsightIQ uses different field names - check all possibilities
+      const handle: string | undefined = account.platform_username || account.username;
 
       if (!handle) {
         console.error("InsightIQ account missing platform_username:", account);
         throw new Error("Could not resolve TikTok handle from InsightIQ");
       }
 
-      // Get additional profile data
-      const displayName: string = account.name || handle;
-      const avatar: string | null = account.profile_pic_url || null;
+      // Get additional profile data - InsightIQ field names
+      const displayName: string = account.platform_profile_name || account.name || handle;
+      const avatar: string | null = account.platform_profile_picture_url || account.profile_pic_url || null;
+      console.log("Extracted: handle=", handle, "displayName=", displayName, "avatar=", avatar);
 
       // Update user with TikTok data (using existing schema fields)
       await prisma.user.update({
