@@ -2392,8 +2392,40 @@ export const appRouter = t.router({
     });
 
     if (!createRes.ok) {
-      console.error("InsightIQ user creation failed:", await createRes.text());
-      throw new Error("Failed to create InsightIQ user");
+      const errorText = await createRes.text();
+      console.error("InsightIQ user creation failed:", createRes.status, errorText);
+
+      // If user already exists (409), try to get existing user
+      if (createRes.status === 409) {
+        console.log("InsightIQ user already exists, fetching existing user...");
+        const listRes = await fetch(`${INSIGHTIQ_BASE_URL}/users?name=${userId}`, {
+          headers: { Authorization: authHeader },
+        });
+        if (listRes.ok) {
+          const users = await listRes.json();
+          if (users.data && users.data.length > 0) {
+            const existingUser = users.data[0];
+            // Continue with existing user
+            const tokenRes = await fetch(`${INSIGHTIQ_BASE_URL}/sdk-tokens`, {
+              method: "POST",
+              headers: {
+                Authorization: authHeader,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                user_id: existingUser.id,
+                products: ["IDENTITY", "IDENTITY.AUDIENCE", "ENGAGEMENT", "ENGAGEMENT.AUDIENCE", "INCOME"],
+              }),
+            });
+            if (tokenRes.ok) {
+              const tokenData = await tokenRes.json();
+              return { token: tokenData.sdk_token as string };
+            }
+          }
+        }
+      }
+
+      throw new Error(`InsightIQ API error (${createRes.status}): ${errorText.substring(0, 200)}`);
     }
 
     const created = await createRes.json();
