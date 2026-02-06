@@ -2512,7 +2512,7 @@ export const appRouter = t.router({
       }
     }
 
-    // Clear TikTok data from user
+    // Clear TikTok data from user (use 0 for non-nullable Int fields)
     await prisma.user.update({
       where: { id: userId },
       data: {
@@ -2522,10 +2522,10 @@ export const appRouter = t.router({
         tiktokDisplayName: null,
         tiktokAvatarUrl: null,
         tiktokConnectedAt: null,
-        followerCount: null,
-        followingCount: null,
-        totalLikes: null,
-        videoCount: null,
+        followerCount: 0,
+        followingCount: 0,
+        totalLikes: 0,
+        videoCount: 0,
         creatorTier: null,
         lastStatsFetchedAt: null,
       },
