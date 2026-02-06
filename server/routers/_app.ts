@@ -2367,7 +2367,11 @@ export const appRouter = t.router({
   // ─── InsightIQ (Phyllo) Integration ───────────────────────────────────
 
   // Create InsightIQ SDK token for authenticated users
-  createInsightIQToken: t.procedure.mutation(async ({ ctx }) => {
+  createInsightIQToken: t.procedure
+    .input(z.object({
+      redirectUrl: z.string().optional(),
+    }).optional())
+    .mutation(async ({ ctx, input }) => {
     const userId = ctx.user?.id;
     if (!userId) throw new Error("UNAUTHORIZED");
 
@@ -2383,16 +2387,23 @@ export const appRouter = t.router({
 
     // Helper function to create SDK token
     const createSdkToken = async (insightiqUserId: string) => {
+      const body: Record<string, any> = {
+        user_id: insightiqUserId,
+        products: ["IDENTITY", "IDENTITY.AUDIENCE", "ENGAGEMENT", "ENGAGEMENT.AUDIENCE", "INCOME"],
+      };
+
+      // Add redirect URL if provided (for web SDK flow)
+      if (input?.redirectUrl) {
+        body.redirect_url = input.redirectUrl;
+      }
+
       const tokenRes = await fetch(`${INSIGHTIQ_BASE_URL}/v1/sdk-tokens`, {
         method: "POST",
         headers: {
           Authorization: authHeader,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          user_id: insightiqUserId,
-          products: ["IDENTITY", "IDENTITY.AUDIENCE", "ENGAGEMENT", "ENGAGEMENT.AUDIENCE", "INCOME"],
-        }),
+        body: JSON.stringify(body),
       });
       if (!tokenRes.ok) {
         const errText = await tokenRes.text();
@@ -2400,7 +2411,14 @@ export const appRouter = t.router({
         throw new Error("Failed to create InsightIQ token");
       }
       const tokenData = await tokenRes.json();
-      return { token: tokenData.sdk_token as string };
+      console.log("InsightIQ SDK token response:", JSON.stringify(tokenData));
+
+      // Return token and connect_url if provided by InsightIQ
+      return {
+        token: tokenData.sdk_token as string,
+        connectUrl: tokenData.redirect_url || tokenData.connect_url || null,
+        userId: insightiqUserId,
+      };
     };
 
     // Step 1: Try to get existing user first (handles reconnect case)
