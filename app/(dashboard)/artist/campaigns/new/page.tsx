@@ -226,10 +226,10 @@ export default function NewCampaignPage() {
                   </Button>
                 </DialogTrigger>
                 <DialogContent className="sm:max-w-[600px]">
-                  {/* Wrapped in div to avoid Card-in-Dialog style issues if any, strictly speaking SongUpload is a Card */}
-                  <div className="pt-4">
-                    <SongUpload onSuccess={handleSongUploaded} variant="plain" />
-                  </div>
+                  <DialogHeader>
+                    <DialogTitle>Şarkı Ekle</DialogTitle>
+                  </DialogHeader>
+                  <SongUpload onSuccess={handleSongUploaded} variant="plain" showHeader={false} />
                 </DialogContent>
               </Dialog>
             </div>

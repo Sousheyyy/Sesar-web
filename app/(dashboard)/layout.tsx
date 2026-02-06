@@ -3,7 +3,6 @@ import { Sidebar } from "@/components/dashboard/sidebar";
 import { UserNav } from "@/components/dashboard/user-nav";
 import { Bell, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { TikTokUsernameModal } from "@/components/dashboard/tiktok-username-modal";
 
 // Force dynamic rendering for Cloudflare Pages
 export const dynamic = 'force-dynamic';
@@ -62,9 +61,6 @@ export default async function DashboardLayout({
           </div>
         </main>
       </div>
-
-      {/* Onboarding Modals */}
-      <TikTokUsernameModal isOpen={!user.tiktokHandle && user.role === "CREATOR"} />
     </div>
   );
 }

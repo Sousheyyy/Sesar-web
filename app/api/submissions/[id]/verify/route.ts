@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { tiktokScraper } from "@/lib/tiktok-scraper";
+import { tiktokMetadata } from "@/lib/tiktok-metadata";
 import { UserRole } from "@prisma/client";
 import { updateEstimatedPayouts } from "@/lib/payout";
 import { extractTikTokUsernameFromUrl } from "@/lib/url-utils";
@@ -55,10 +55,10 @@ export async function POST(
       );
     }
 
-    // Scrape TikTok video data
-    let videoData;
+    // Extract TikTok video metadata
+    let videoMetadata;
     try {
-      videoData = await tiktokScraper.verifyVideo(submission.tiktokUrl);
+      videoMetadata = await tiktokMetadata.getVideoMetadata(submission.tiktokUrl);
     } catch (scrapeError: any) {
       // Handle TikAPI specific errors
       if (scrapeError.message?.includes("rate limit")) {
@@ -107,34 +107,7 @@ export async function POST(
     };
 
     const creatorHandle = normalizeUsername(submission.creator.tiktokHandle);
-    let videoCreatorUsername: string | null = null;
-
-    // Try to get creator username from API response first
-    if (videoData.creatorUsername) {
-      videoCreatorUsername = normalizeUsername(videoData.creatorUsername);
-    } else {
-      // Fallback: try to extract from URL
-      videoCreatorUsername = extractTikTokUsernameFromUrl(submission.tiktokUrl);
-      if (videoCreatorUsername) {
-        videoCreatorUsername = normalizeUsername(videoCreatorUsername);
-      }
-    }
-
-    if (!videoCreatorUsername) {
-      await prisma.submission.update({
-        where: { id: params.id },
-        data: {
-          status: "REJECTED",
-          rejectionReason: "Video sahipliği doğrulanamadı. Lütfen video URL'sinin doğru olduğundan ve videonun herkese açık olduğundan emin olun.",
-          verified: false,
-        },
-      });
-
-      return NextResponse.json({
-        success: false,
-        message: "Video reddedildi: Video sahipliği doğrulanamadı",
-      });
-    }
+    const videoCreatorUsername = normalizeUsername(videoMetadata.author);
 
     if (videoCreatorUsername !== creatorHandle) {
       await prisma.submission.update({
@@ -152,25 +125,29 @@ export async function POST(
       });
     }
 
-    // Verify song
-    const songMatches = tiktokScraper.verifySong(
-      videoData,
-      submission.campaign.song.title
+    // Verify song (EXACT MATCH ONLY)
+    const songMatch = tiktokMetadata.validateSongMatch(
+      {
+        id: submission.campaign.song.tiktokMusicId!,
+        title: submission.campaign.song.title,
+        authorName: submission.campaign.song.authorName!
+      },
+      videoMetadata.song
     );
 
-    if (!songMatches) {
+    if (!songMatch.match) {
       await prisma.submission.update({
         where: { id: params.id },
         data: {
           status: "REJECTED",
-          rejectionReason: "Video doğru şarkıyı kullanmıyor",
+          rejectionReason: `Video doğru şarkıyı kullanmıyor: ${songMatch.reason}`,
           verified: false,
         },
       });
 
       return NextResponse.json({
         success: false,
-        message: "Video reddedildi: Yanlış şarkı",
+        message: `Video reddedildi: ${songMatch.reason}`,
       });
     }
 
@@ -194,36 +171,22 @@ export async function POST(
       });
     }
 
-    // Check follower requirement
-    if (
-      submission.campaign.minFollowers &&
-      videoData.creatorFollowers !== undefined &&
-      videoData.creatorFollowers < submission.campaign.minFollowers
-    ) {
-      await prisma.submission.update({
-        where: { id: params.id },
-        data: {
-          status: "REJECTED",
-          rejectionReason: `İçerik üreticisinin ${videoData.creatorFollowers} takipçisi var, ancak ${submission.campaign.minFollowers} takipçi gerekiyor`,
-          verified: false,
-        },
-      });
+    // NOTE: Follower requirement check removed - use OAuth data instead
+    // The follower count is now updated via official TikTok OAuth
 
-      return NextResponse.json({
-        success: false,
-        message: "Video reddedildi: Yetersiz takipçi",
-      });
-    }
-
-    // All checks passed - approve submission
-    const updatedSubmission = await tiktokScraper.updateSubmissionData(
-      params.id,
-      videoData
-    );
-
+    // All checks passed - update submission with video data and approve
     await prisma.submission.update({
       where: { id: params.id },
       data: {
+        tiktokVideoId: videoMetadata.id,
+        lastViewCount: videoMetadata.stats.views,
+        lastLikeCount: videoMetadata.stats.likes,
+        lastCommentCount: videoMetadata.stats.comments,
+        lastShareCount: videoMetadata.stats.shares,
+        videoDuration: videoMetadata.duration,
+        verified: true,
+        verifiedAt: new Date(),
+        lastCheckedAt: new Date(),
         status: "APPROVED",
       },
     });
@@ -244,7 +207,7 @@ export async function POST(
     return NextResponse.json({
       success: true,
       message: "Submission approved and added to prize pool",
-      videoData,
+      videoData: videoMetadata,
     });
   } catch (error: any) {
     console.error("Verification error:", error);

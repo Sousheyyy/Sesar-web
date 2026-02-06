@@ -31,7 +31,7 @@ export function SongUpload({ onSuccess, variant = "default", showHeader = true }
   const [isUploading, setIsUploading] = useState(false);
   const [isFetching, setIsFetching] = useState(false);
   const [songPreview, setSongPreview] = useState<SongPreview | null>(null);
-    const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState({
     tiktokUrl: "",
   });
 
@@ -66,18 +66,18 @@ export function SongUpload({ onSuccess, variant = "default", showHeader = true }
 
       // Set preview with enhanced statistics
       setSongPreview({
-        id: data.id,
-        title: data.title,
-        duration: data.duration,
-        coverImage: data.coverImage,
+        id: data.song.id,
+        title: data.song.title,
+        duration: data.song.duration || 0,
+        coverImage: data.song.coverImage,
         videoCount: data.videoCount,
-        authorName: data.authorName,
+        authorName: data.song.authorName,
       });
 
       toast.success("Şarkı başarıyla eklendi!");
-      
+
       if (onSuccess) {
-        onSuccess(data);
+        onSuccess(data.song);
       } else {
         router.push("/artist/campaigns/new");
         router.refresh();
@@ -98,11 +98,11 @@ export function SongUpload({ onSuccess, variant = "default", showHeader = true }
   const Content = (
     <form onSubmit={handleSubmit} className="space-y-4">
       <div className="space-y-2">
-        <Label htmlFor="tiktokUrl">TikTok Linki *</Label>
+        <Label htmlFor="tiktokUrl">TikTok Video Linki *</Label>
         <div className="flex gap-2">
           <Input
             id="tiktokUrl"
-            placeholder="https://vt.tiktok.com/..."
+            placeholder="https://www.tiktok.com/@user/video/..."
             value={formData.tiktokUrl}
             onChange={(e) => setFormData({ ...formData, tiktokUrl: e.target.value })}
             required
@@ -110,7 +110,8 @@ export function SongUpload({ onSuccess, variant = "default", showHeader = true }
           />
         </div>
         <p className="text-xs text-muted-foreground">
-          Şarkının TikTok müzik sayfası veya şarkıyı kullanan bir video linki
+          <strong>Önerilen:</strong> Şarkınızı kullanan bir TikTok video linki yapıştırın (örn: tiktok.com/@user/video/123). 
+          Şarkı bilgileri otomatik olarak çekilecektir.
         </p>
       </div>
 
@@ -118,8 +119,8 @@ export function SongUpload({ onSuccess, variant = "default", showHeader = true }
         <div className="rounded-md border p-4 space-y-3">
           <div className="flex items-center gap-3">
             {songPreview.coverImage && (
-              <img 
-                src={songPreview.coverImage} 
+              <img
+                src={songPreview.coverImage}
                 alt={songPreview.title}
                 className="h-20 w-20 rounded object-cover"
               />
@@ -171,9 +172,9 @@ export function SongUpload({ onSuccess, variant = "default", showHeader = true }
         </div>
       )}
 
-      <Button 
-        type="submit" 
-        disabled={isFetching || isUploading || !formData.tiktokUrl} 
+      <Button
+        type="submit"
+        disabled={isFetching || isUploading || !formData.tiktokUrl}
         className="w-full gap-2"
       >
         {isFetching ? (
@@ -194,13 +195,13 @@ export function SongUpload({ onSuccess, variant = "default", showHeader = true }
   if (variant === "plain") {
     return (
       <div className="space-y-4">
-         {showHeader && (
-            <div className="space-y-1.5 p-6 pl-0 pt-0">
-                <h3 className="font-semibold leading-none tracking-tight">Şarkı Ekle</h3>
-                <p className="text-sm text-muted-foreground">TikTok müzik veya video linkini yapıştırarak şarkınızı ekleyin</p>
-            </div>
-         )}
-         {Content}
+        {showHeader && (
+          <div className="space-y-1.5 p-6 pl-0 pt-0">
+            <h3 className="font-semibold leading-none tracking-tight">Şarkı Ekle</h3>
+            <p className="text-sm text-muted-foreground">TikTok müzik veya video linkini yapıştırarak şarkınızı ekleyin</p>
+          </div>
+        )}
+        {Content}
       </div>
     );
   }

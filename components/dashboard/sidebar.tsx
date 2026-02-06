@@ -32,29 +32,19 @@ const navigation = {
     { name: "Kullanıcılar", href: "/admin/users", icon: Users },
     { name: "Kampanyalar", href: "/admin/campaigns", icon: Music2 },
     { name: "İşlemler", href: "/admin/transactions", icon: FileText },
-    { name: "Pazar Yeri", href: "/dashboard/marketplace", icon: TrendingUp },
     { name: "Profil", href: "/profile", icon: User },
   ],
   [UserRole.ARTIST]: [
-    { name: "Panel", href: "/dashboard", icon: LayoutDashboard },
     { name: "Şarkılarım", href: "/artist/songs", icon: Music2 },
     { name: "Kampanyalarım", href: "/artist/campaigns", icon: TrendingUp },
     { name: "Cüzdan", href: "/wallet", icon: Wallet },
-    { name: "Pazar Yeri", href: "/dashboard/marketplace", icon: TrendingUp },
     { name: "Profil", href: "/profile", icon: User },
-  ],
-  [UserRole.CREATOR]: [
-    { name: "Genel Bakış", href: "/dashboard", icon: LayoutDashboard },
-    { name: "Pazar Yeri", href: "/dashboard/marketplace", icon: Music2 },
-    { name: "Gönderilerim", href: "/dashboard/submissions", icon: CheckCircle2 },
-    { name: "Cüzdanım", href: "/wallet", icon: Wallet },
-    { name: "Profilim", href: "/profile", icon: User },
   ],
 };
 
 export function Sidebar({ role }: SidebarProps) {
   const pathname = usePathname();
-  const links = navigation[role] || navigation[UserRole.CREATOR];
+  const links = navigation[role] || navigation[UserRole.ARTIST];
 
   return (
     <div className="flex h-full flex-col border-r border-white/5 bg-[#0A0A0B]/40 backdrop-blur-xl">

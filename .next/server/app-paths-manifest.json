@@ -1,4 +1,6 @@
 {
-  "/api/trpc/[trpc]/route": "app/api/trpc/[trpc]/route.js",
-  "/page": "app/page.js"
+  "/(auth)/login/page": "app/(auth)/login/page.js",
+  "/(dashboard)/profile/page": "app/(dashboard)/profile/page.js",
+  "/(dashboard)/artist/campaigns/new/page": "app/(dashboard)/artist/campaigns/new/page.js",
+  "/(dashboard)/artist/campaigns/page": "app/(dashboard)/artist/campaigns/page.js"
 }

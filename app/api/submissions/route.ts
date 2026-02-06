@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { tiktokScraper } from "@/lib/tiktok-scraper";
+import { tiktokMetadata } from "@/lib/tiktok-metadata";
 import { updateEstimatedPayouts } from "@/lib/payout";
 import { extractTikTokUsernameFromUrl } from "@/lib/url-utils";
 import { logApiCallSimple, extractEndpoint } from "@/lib/api-logger-simple";
@@ -197,8 +197,8 @@ export async function POST(req: NextRequest) {
     let rejectionReason = "";
 
     try {
-      // Fetch video data from TikTok
-      const videoData = await tiktokScraper.verifyVideo(tiktokUrl);
+      // Fetch video data from TikTok using new metadata service
+      const videoMetadata = await tiktokMetadata.getVideoMetadata(tiktokUrl);
 
       // VERIFICATION STEP 2: Verify video ownership (video belongs to connected TikTok account)
       const normalizeUsername = (username: string) => {
@@ -206,51 +206,48 @@ export async function POST(req: NextRequest) {
       };
 
       const userHandle = normalizeUsername(user.tiktokHandle);
-      let videoCreatorUsername: string | null = null;
+      const videoCreatorUsername = normalizeUsername(videoMetadata.author);
 
-      // Try to get creator username from API response first
-      if (videoData.creatorUsername) {
-        videoCreatorUsername = normalizeUsername(videoData.creatorUsername);
-      } else {
-        // Fallback: try to extract from URL
-        videoCreatorUsername = extractTikTokUsernameFromUrl(tiktokUrl);
-        if (videoCreatorUsername) {
-          videoCreatorUsername = normalizeUsername(videoCreatorUsername);
-        }
-      }
-
-      if (!videoCreatorUsername) {
-        rejectionReason = "Video sahipliği doğrulanamadı. Lütfen video URL'sinin doğru olduğundan ve videonun herkese açık olduğundan emin olun.";
-      } else if (videoCreatorUsername !== userHandle) {
+      if (videoCreatorUsername !== userHandle) {
         rejectionReason = `Bu video bağlı TikTok hesabınıza (@${user.tiktokHandle}) ait değil. Lütfen kendi hesabınızdan bir video gönderin.`;
       }
-      // VERIFICATION STEP 3: Check follower requirement (if campaign requires it)
-      else if (
-        campaign.minFollowers &&
-        videoData.creatorFollowers !== undefined &&
-        videoData.creatorFollowers < campaign.minFollowers
-      ) {
-        rejectionReason = `Hesabınızın ${videoData.creatorFollowers} takipçisi var, ancak bu kampanya ${campaign.minFollowers} takipçi gerektiriyor.`;
+      // VERIFICATION STEP 3: Check if song matches (EXACT MATCH ONLY)
+      else {
+        const songMatch = tiktokMetadata.validateSongMatch(
+          {
+            id: campaign.song.tiktokMusicId!,
+            title: campaign.song.title,
+            authorName: campaign.song.authorName!
+          },
+          videoMetadata.song
+        );
+        
+        if (!songMatch.match) {
+          rejectionReason = `Video doğru şarkıyı kullanmıyor: ${songMatch.reason}`;
+        }
       }
-      // VERIFICATION STEP 4: Check if song matches
-      else if (!tiktokScraper.verifySong(videoData, campaign.song.title)) {
-        rejectionReason = "Video doğru şarkıyı kullanmıyor";
-      }
-      // VERIFICATION STEP 5: Check duration requirement
-      else if (
-        campaign.minVideoDuration &&
-        videoData.duration < campaign.minVideoDuration
-      ) {
-        rejectionReason = `Video süresi (${videoData.duration}sn) gereken süreden (${campaign.minVideoDuration}sn) kısa`;
+      // VERIFICATION STEP 4: Check duration requirement
+      if (!rejectionReason && campaign.minVideoDuration && videoMetadata.duration < campaign.minVideoDuration) {
+        rejectionReason = `Video süresi (${videoMetadata.duration}sn) gereken süreden (${campaign.minVideoDuration}sn) kısa`;
       }
 
       // All checks passed
       if (!rejectionReason) {
         // Update submission with video data and approve
-        await tiktokScraper.updateSubmissionData(submission.id, videoData);
         await prisma.submission.update({
           where: { id: submission.id },
-          data: { status: "APPROVED" },
+          data: {
+            tiktokVideoId: videoMetadata.id,
+            lastViewCount: videoMetadata.stats.views,
+            lastLikeCount: videoMetadata.stats.likes,
+            lastCommentCount: videoMetadata.stats.comments,
+            lastShareCount: videoMetadata.stats.shares,
+            videoDuration: videoMetadata.duration,
+            verified: true,
+            verifiedAt: new Date(),
+            lastCheckedAt: new Date(),
+            status: "APPROVED"
+          }
         });
 
         // Notify creator of approval

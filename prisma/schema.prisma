@@ -84,6 +84,23 @@ model User {
   instagramHandle String?
   youtubeHandle String?
   
+  // TikTok OAuth (Official API - Legacy)
+  tiktok_open_id         String?   @unique
+  tiktok_access_token    String?
+  tiktok_refresh_token   String?
+  tiktok_token_expires_at DateTime?
+  tiktok_scopes          String?   // Comma-separated list
+  
+  // InsightIQ OAuth (Primary TikTok Integration)
+  insightiqAccessToken   String?   // Encrypted access token
+  insightiqRefreshToken  String?   // Encrypted refresh token
+  insightiqTokenExpiry   DateTime? // Token expiration
+  tiktokUserId           String?   @unique // TikTok platform_user_id
+  tiktokUsername         String?   // TikTok @username
+  tiktokDisplayName      String?   // TikTok display name
+  tiktokAvatarUrl        String?   // TikTok profile picture
+  tiktokConnectedAt      DateTime? // When user connected TikTok
+  
   // Subscription
   plan          UserPlan  @default(FREE)
   subscriptionEndsAt DateTime?
@@ -118,16 +135,18 @@ model Song {
   
   // TikTok link (optional for backward compatibility with existing data)
   tiktokUrl   String?
-  duration    Int      // in seconds
+  duration    Int?     // in seconds (optional - may not be known from music page URLs)
   
   // Metadata
   coverImage  String?
   description String?  @db.Text
   
-  // New TikTok Statistics (from /public/music/info)
-  tiktokMusicId    String?   // TikTok's internal music ID
+  // InsightIQ Music Metadata
+  tiktokMusicId    String?   @unique // TikTok's internal music ID (from audio_track_info.id)
   videoCount       Int?      // Number of videos using this music
-  authorName       String?   // Original artist name from TikTok
+  authorName       String?   // Original artist name from TikTok (audio_track_info.artist)
+  musicCoverUrl    String?   // Official music cover art (audio_track_info.cover_url)
+  musicUrl         String?   // TikTok music page URL (audio_track_info.url)
   
   // Cache metadata
   statsLastFetched DateTime? // When stats were last updated

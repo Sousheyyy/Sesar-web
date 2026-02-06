@@ -4,7 +4,6 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { Context } from "../context";
-import { tiktokScraper } from "@/lib/tiktok-scraper";
 import { getCreatorTierFromFollowers, isCreatorEligibleForCampaign } from "../lib/tierUtils";
 
 // Minimal tRPC setup for type compatibility
@@ -56,63 +55,72 @@ export const appRouter = t.router({
         throw new Error("UNAUTHORIZED");
       }
 
-      // Rate limiting: Check if updated recently (e.g. 10 mins)
       const currentUser = await prisma.user.findUnique({
         where: { id: userId },
-        select: { lastStatsFetchedAt: true, tiktokHandle: true }
+        select: { 
+          tiktok_access_token: true,
+          tiktok_refresh_token: true,
+          tiktok_token_expires_at: true,
+          lastStatsFetchedAt: true
+        }
       });
 
-      // If user is just refreshing (no new handle) and updated recently
-      if (!input.tiktokHandle && currentUser?.lastStatsFetchedAt) {
+      if (!currentUser?.tiktok_access_token) {
+        throw new Error("TIKTOK_NOT_CONNECTED: Please connect your TikTok account first via OAuth");
+      }
+
+      // Rate limiting: Check if updated recently (e.g. 10 mins)
+      if (currentUser?.lastStatsFetchedAt) {
         const timeDiff = new Date().getTime() - new Date(currentUser.lastStatsFetchedAt).getTime();
         const minutesDiff = timeDiff / (1000 * 60);
 
         if (minutesDiff < 10) {
-          // Return existing user without update if within limit
           return prisma.user.findUnique({ where: { id: userId } });
         }
       }
 
-      let updateData: any = {
-        tiktokHandle: input.tiktokHandle,
-      };
-
-      const toCheck = input.tiktokHandle || currentUser?.tiktokHandle;
-
-      if (toCheck) {
-        try {
-          const { tiktokScraper } = await import("@/lib/tiktok-scraper");
-          const profile = await tiktokScraper.checkUserProfile(toCheck);
-
-          if (profile.isValid) {
-            if (profile.avatar) updateData.avatar = profile.avatar;
-            updateData.tiktokHandle = profile.uniqueId;
-            updateData.name = profile.uniqueId; // Or keep existing name? content creator name might be better
-
-            // Stats Update
-            if (profile.followerCount !== undefined) updateData.followerCount = profile.followerCount;
-            if (profile.followingCount !== undefined) updateData.followingCount = profile.followingCount;
-            if (profile.heartCount !== undefined) updateData.totalLikes = profile.heartCount;
-            if (profile.videoCount !== undefined) updateData.videoCount = profile.videoCount;
-
-            updateData.lastStatsFetchedAt = new Date();
-
-            // Calculate and save creator tier based on follower count
-            if (profile.followerCount !== undefined) {
-              updateData.creatorTier = getCreatorTierFromFollowers(profile.followerCount);
-            }
+      // Refresh token if expired
+      let accessToken = currentUser.tiktok_access_token;
+      if (
+        currentUser.tiktok_token_expires_at &&
+        new Date() > currentUser.tiktok_token_expires_at
+      ) {
+        const { tiktokAPI } = await import("@/lib/tiktok-api");
+        const newTokens = await tiktokAPI.refreshAccessToken(
+          currentUser.tiktok_refresh_token!
+        );
+        
+        accessToken = newTokens.access_token;
+        await prisma.user.update({
+          where: { id: userId },
+          data: {
+            tiktok_access_token: newTokens.access_token,
+            tiktok_refresh_token: newTokens.refresh_token,
+            tiktok_token_expires_at: new Date(
+              Date.now() + newTokens.expires_in * 1000
+            )
           }
-        } catch (error) {
-          console.error("Failed to fetch TikTok profile:", error);
-          if (input.tiktokHandle) {
-            throw new Error("TikTok profili bulunamadı veya erişilemiyor.");
-          }
-        }
+        });
       }
 
+      // Fetch fresh user data from TikTok API
+      const { tiktokAPI } = await import("@/lib/tiktok-api");
+      const userInfo = await tiktokAPI.getUserInfo(accessToken);
+
+      // Update user stats
       const updatedUser = await prisma.user.update({
         where: { id: userId },
-        data: updateData,
+        data: {
+          tiktokHandle: userInfo.username.replace('@', ''),
+          name: userInfo.display_name,
+          avatar: userInfo.avatar_url,
+          followerCount: userInfo.follower_count,
+          followingCount: userInfo.following_count,
+          totalLikes: userInfo.likes_count,
+          videoCount: userInfo.video_count,
+          creatorTier: getCreatorTierFromFollowers(userInfo.follower_count),
+          lastStatsFetchedAt: new Date()
+        }
       });
 
       return updatedUser;
@@ -747,16 +755,16 @@ export const appRouter = t.router({
 
       if (diffHours > 6) {
         try {
-          const { tiktokScraper } = await import("@/lib/tiktok-scraper");
-          const videoData = await tiktokScraper.verifyVideo(mySubmission.tiktokUrl);
+          const { tiktokMetadata } = await import("@/lib/tiktok-metadata");
+          const videoData = await tiktokMetadata.getVideoMetadata(mySubmission.tiktokUrl);
 
           finalSubmission = await prisma.submission.update({
             where: { id: mySubmission.id },
             data: {
-              lastViewCount: videoData.views,
-              lastLikeCount: videoData.likes,
-              lastCommentCount: videoData.comments,
-              lastShareCount: videoData.shares,
+              lastViewCount: videoData.stats.views,
+              lastLikeCount: videoData.stats.likes,
+              lastCommentCount: videoData.stats.comments,
+              lastShareCount: videoData.stats.shares,
               lastCheckedAt: new Date()
             }
           });
@@ -808,13 +816,16 @@ export const appRouter = t.router({
       const user = await prisma.user.findUnique({ where: { id: ctx.user.id } });
       if (!user) throw new Error("USER_NOT_FOUND");
 
+      // Extract video metadata
+      const { tiktokMetadata } = await import("@/lib/tiktok-metadata");
+      
       let videoData;
       try {
-        videoData = await tiktokScraper.verifyVideo(input.tiktokUrl);
-      } catch (e: any) {
+        videoData = await tiktokMetadata.getVideoMetadata(input.tiktokUrl);
+      } catch (error: any) {
         return {
           isValid: false,
-          errors: [`Video doğrulanamadı: ${e.message}`],
+          errors: [`Video validation failed: ${error.message}`],
           video: null,
           checks: {}
         };
@@ -825,32 +836,38 @@ export const appRouter = t.router({
       // 1. Account Check
       let isAccountMatch = false;
       if (user.tiktokHandle) {
-        isAccountMatch = videoData.creatorUsername?.toLowerCase() === user.tiktokHandle.toLowerCase();
+        isAccountMatch = videoData.author.toLowerCase() === user.tiktokHandle.toLowerCase();
         if (!isAccountMatch) {
-          errors.push(`Hesap Uyuşmazlığı: Video @${videoData.creatorUsername} ait, TikPay hesabın @${user.tiktokHandle}`);
+          errors.push(
+            `Account mismatch: Video belongs to @${videoData.author}, ` +
+            `but your account is @${user.tiktokHandle}`
+          );
         }
       } else {
-        errors.push("Profilinde TikTok kullanıcı adı tanımlı değil. Lütfen profilinden ekle.");
+        errors.push("TikTok handle not set in profile");
       }
 
-      // 2. Song Check
-      const musicIdMatch = campaign.song.tiktokMusicId && videoData.soundId === campaign.song.tiktokMusicId;
-      const titleMatch = tiktokScraper.verifySong(videoData, campaign.song.title);
-      const isSongMatch = !!(musicIdMatch || titleMatch);
+      // 2. Song Check (EXACT MATCH ONLY)
+      const songMatch = tiktokMetadata.validateSongMatch(
+        {
+          id: campaign.song.tiktokMusicId!,
+          title: campaign.song.title,
+          authorName: campaign.song.authorName!
+        },
+        videoData.song
+      );
 
-      if (!isSongMatch) {
-        errors.push(`Müzik Eşleşmedi: Kampanya şarkısı "${campaign.song.title}" videoda bulunamadı.`);
+      if (!songMatch.match) {
+        errors.push(`Song mismatch: ${songMatch.reason}`);
       }
 
-      // 3. Requirements
+      // 3. Duration Check
       const durationMatch = !campaign.minVideoDuration || videoData.duration >= campaign.minVideoDuration;
       if (!durationMatch) {
-        errors.push(`Süre Yetersiz: Video ${videoData.duration}sn (Min: ${campaign.minVideoDuration}sn)`);
-      }
-
-      const followerMatch = !campaign.minFollowers || (videoData.creatorFollowers || 0) >= campaign.minFollowers;
-      if (!followerMatch) {
-        errors.push(`Takipçi Yetersiz: ${videoData.creatorFollowers} takipçi (Min: ${campaign.minFollowers})`);
+        errors.push(
+          `Video too short: ${videoData.duration}s ` +
+          `(min: ${campaign.minVideoDuration}s)`
+        );
       }
 
       return {
@@ -859,9 +876,8 @@ export const appRouter = t.router({
         video: videoData,
         checks: {
           accountMatch: isAccountMatch,
-          songMatch: isSongMatch,
-          durationMatch,
-          followerMatch
+          songMatch: songMatch.match,
+          durationMatch
         }
       };
     }),
@@ -951,33 +967,52 @@ export const appRouter = t.router({
         throw new Error("CAMPAIGN_FULL");
       }
 
-      // 1. Verify Video with TikAPI (mocked for now if API key missing)
-      // We import dynamically to avoid issues if not used elsewhere
-      const { tiktokScraper } = await import("@/lib/tiktok-scraper");
+      // 1. Extract video metadata and validate
+      const { tiktokMetadata } = await import("@/lib/tiktok-metadata");
 
       let videoData;
       try {
-        videoData = await tiktokScraper.verifyVideo(input.tiktokUrl);
-      } catch (e: any) {
-        throw new Error(`INVALID_VIDEO: ${e.message}`);
+        videoData = await tiktokMetadata.getVideoMetadata(input.tiktokUrl);
+      } catch (error: any) {
+        throw new Error(`INVALID_VIDEO: ${error.message}`);
       }
 
-      // 2. Create Submission
+      // 2. Get campaign with song info for validation
+      const campaignWithSong = await prisma.campaign.findUnique({
+        where: { id: input.campaignId },
+        include: { song: true }
+      });
+
+      if (!campaignWithSong) throw new Error("CAMPAIGN_NOT_FOUND");
+
+      // 3. Validate song match (EXACT MATCH ONLY)
+      const songMatch = tiktokMetadata.validateSongMatch(
+        {
+          id: campaignWithSong.song.tiktokMusicId!,
+          title: campaignWithSong.song.title,
+          authorName: campaignWithSong.song.authorName!
+        },
+        videoData.song
+      );
+
+      if (!songMatch.match) {
+        throw new Error(`SONG_MISMATCH: ${songMatch.reason}`);
+      }
+
+      // 4. Create Submission
       const submission = await prisma.submission.create({
         data: {
           campaignId: input.campaignId,
           creatorId: userId,
           tiktokUrl: input.tiktokUrl,
-          tiktokVideoId: videoData.videoId,
-          status: "APPROVED", // Auto-approve since video passed validation
-          // Initial stats
-          lastViewCount: videoData.views,
-          lastLikeCount: videoData.likes,
-          lastCommentCount: videoData.comments,
-          lastShareCount: videoData.shares,
+          tiktokVideoId: videoData.id,
+          status: "APPROVED",
+          lastViewCount: videoData.stats.views,
+          lastLikeCount: videoData.stats.likes,
+          lastCommentCount: videoData.stats.comments,
+          lastShareCount: videoData.stats.shares,
           videoDuration: videoData.duration,
-          creatorFollowers: videoData.creatorFollowers,
-          lastCheckedAt: new Date(),
+          lastCheckedAt: new Date()
         },
       });
 
@@ -1050,32 +1085,32 @@ export const appRouter = t.router({
       const { getCampaignTierFromBudget, getMinFollowersForTier, getMaxSubmissionsFromBudget } =
         await import("@/server/lib/tierUtils");
 
-      // 1. Fetch Song Data from TikTok (using shared scraper)
-      const { tiktokScraper } = await import("@/lib/tiktok-scraper");
+      // 1. Extract song metadata from TikTok
+      const { tiktokMetadata } = await import("@/lib/tiktok-metadata");
 
-      let songData;
+      let songMetadata;
       try {
-        // This fetches song metadata (title, artist, cover)
-        songData = await tiktokScraper.fetchSongDetails(input.tiktokUrl);
-      } catch (e: any) {
-        throw new Error(`INVALID_SOUND: ${e.message}`);
+        songMetadata = await tiktokMetadata.getSongMetadata(input.tiktokUrl);
+      } catch (error: any) {
+        throw new Error(`INVALID_SONG_URL: ${error.message}`);
       }
 
       // 2. Find or Create Song
       let song = await prisma.song.findFirst({
-        where: { tiktokUrl: input.tiktokUrl }
+        where: { tiktokMusicId: songMetadata.id }
       });
 
       if (!song) {
         song = await prisma.song.create({
           data: {
-            title: songData.title,
+            title: songMetadata.title,
+            authorName: songMetadata.authorName,
             tiktokUrl: input.tiktokUrl,
-            duration: songData.duration,
-            coverImage: songData.coverImage,
+            tiktokMusicId: songMetadata.id,
+            coverImage: songMetadata.coverUrl,
+            duration: songMetadata.duration,
             artistId: userId,
-            authorName: songData.authorName,
-            statsLastFetched: new Date(),
+            statsLastFetched: new Date()
           },
         });
       }
@@ -1665,8 +1700,8 @@ export const appRouter = t.router({
       } else if (input.tool === "VALUATION") {
         try {
           // Real Data via TikAPI
-          const apiKey = process.env.TIK_API_KEY;
-          if (!apiKey) throw new Error("Missing TikAPI Key (TIK_API_KEY)");
+          // Marketplace tools are deprecated - require official TikTok Marketing API
+          throw new Error("Marketplace analysis tools are currently unavailable");
 
           // 1. Fetch User Info (for Follower Count)
           const userRes = await fetch(`https://api.tikapi.io/public/check?username=${input.input}`, {
@@ -1781,8 +1816,8 @@ export const appRouter = t.router({
 
       } else if (input.tool === "PROFILE") {
         try {
-          const apiKey = process.env.TIK_API_KEY;
-          if (!apiKey) throw new Error("Missing TikAPI Key");
+          // Marketplace tools are deprecated - require official TikTok Marketing API
+          throw new Error("Marketplace analysis tools are currently unavailable");
 
           // 1. Check User
           const userRes = await fetch(`https://api.tikapi.io/public/check?username=${input.input}`, { headers: { "X-API-KEY": apiKey } });
@@ -1891,8 +1926,8 @@ export const appRouter = t.router({
 
       } else if (input.tool === "AUDIT") {
         try {
-          const apiKey = process.env.TIK_API_KEY;
-          if (!apiKey) throw new Error("Missing TikAPI Key");
+          // Marketplace tools are deprecated - require official TikTok Marketing API
+          throw new Error("Marketplace analysis tools are currently unavailable");
 
           // Extract Video ID from Link
           let videoId = input.input;
@@ -2000,8 +2035,8 @@ export const appRouter = t.router({
         }
       } else if (input.tool === "COMPARE") {
         try {
-          const apiKey = process.env.TIK_API_KEY;
-          if (!apiKey) throw new Error("Missing TikAPI Key");
+          // Marketplace tools are deprecated - require official TikTok Marketing API
+          throw new Error("Marketplace analysis tools are currently unavailable");
 
           // Helper function to analyze a user
           const analyzeUser = async (username: string) => {
@@ -2159,7 +2194,7 @@ export const appRouter = t.router({
       if (campaign.status === "COMPLETED") throw new Error("CAMPAIGN_ALREADY_COMPLETED");
 
       // 2. Refresh Metrics (outside transaction - can fail gracefully)
-      const { tiktokScraper } = await import("@/lib/tiktok-scraper");
+      const { tiktokMetadata } = await import("@/lib/tiktok-metadata");
       const submissions = campaign.submissions;
       const CHUNK_SIZE = 5;
 
@@ -2170,13 +2205,13 @@ export const appRouter = t.router({
         await Promise.all(chunk.map(async (sub) => {
           try {
             if (sub.tiktokUrl) {
-              const videoData = await tiktokScraper.verifyVideo(sub.tiktokUrl);
+              const videoData = await tiktokMetadata.getVideoMetadata(sub.tiktokUrl);
               refreshedMetrics.push({
                 id: sub.id,
-                views: videoData.views,
-                likes: videoData.likes,
-                comments: videoData.comments,
-                shares: videoData.shares
+                views: videoData.stats.views,
+                likes: videoData.stats.likes,
+                comments: videoData.stats.comments,
+                shares: videoData.stats.shares
               });
             }
           } catch (e) {

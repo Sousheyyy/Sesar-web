@@ -18,6 +18,14 @@ const nextConfig = {
         protocol: 'https',
         hostname: '**.musical.ly',
       },
+      {
+        protocol: 'https',
+        hostname: 'picsum.photos',
+      },
+      {
+        protocol: 'https',
+        hostname: 'api.dicebear.com',
+      },
     ],
     formats: ['image/avif', 'image/webp'],
   },
@@ -26,6 +34,15 @@ const nextConfig = {
       bodySizeLimit: '10mb',
     },
     optimizePackageImports: ['lucide-react', '@radix-ui/react-icons'],
+    // Exclude these packages from webpack bundling (they're server-only)
+    serverComponentsExternalPackages: [
+      'tiktok-scraper-ts',
+      'playwright-core',
+      'playwright-chromium',
+      'chromium-bidi',
+      'tiktok-signature',
+      'electron',
+    ],
   },
   // Production optimizations
   compress: true,
@@ -49,6 +66,36 @@ const nextConfig = {
   // Exclude cache directories from build output for Cloudflare Pages
   // This prevents large cache files from being included in the deployment
   distDir: '.next',
+  // Webpack config to exclude server-only packages from client bundle
+  webpack: (config, { isServer }) => {
+    if (!isServer) {
+      // Completely ignore these server-only modules on client side
+      config.resolve.alias = {
+        ...config.resolve.alias,
+        'tiktok-scraper-ts': false,
+        'playwright-core': false,
+        'playwright-chromium': false,
+        'chromium-bidi': false,
+        'tiktok-signature': false,
+      };
+      
+      config.resolve.fallback = {
+        ...config.resolve.fallback,
+        fs: false,
+        net: false,
+        tls: false,
+        crypto: false,
+        stream: false,
+        http: false,
+        https: false,
+        zlib: false,
+        path: false,
+        os: false,
+        child_process: false,
+      };
+    }
+    return config;
+  },
 }
 
 module.exports = nextConfig

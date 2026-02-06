@@ -36,7 +36,16 @@ export async function requireArtist() {
 }
 
 export async function requireCreator() {
-  return await requireRole([UserRole.CREATOR, UserRole.ARTIST, UserRole.ADMIN]);
+  // Creators should use the mobile app, not the web app
+  // This function is kept for API endpoints that the mobile app uses
+  const user = await requireAuth();
+  
+  // If accessed from web (not API), redirect creators to unauthorized
+  if (user.role === UserRole.CREATOR) {
+    redirect("/unauthorized?reason=mobile-only");
+  }
+  
+  return user;
 }
 
 

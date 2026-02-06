@@ -1,6 +1,5 @@
 import { prisma } from "@/lib/prisma";
 import { Decimal } from "@prisma/client/runtime/library";
-import { tiktokScraper } from "@/lib/tiktok-scraper";
 
 /**
  * Calculate the Impact Score for a submission based on the weighted engagement model

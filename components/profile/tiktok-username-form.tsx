@@ -21,7 +21,21 @@ import {
   Mail,
   Calendar
 } from "lucide-react";
-import type { TikTokUserProfile } from "@/lib/tiktok-scraper";
+// TikTokUserProfile type removed - use OAuth instead
+
+// Define the type locally since we no longer import from tiktok-scraper
+interface TikTokUserProfile {
+  uniqueId: string;
+  nickname: string;
+  avatar?: string;
+  signature?: string;
+  followerCount?: number;
+  followingCount?: number;
+  videoCount?: number;
+  heartCount?: number;
+  isVerified?: boolean;
+  isValid: boolean;
+}
 
 interface TikTokUsernameFormProps {
   currentTikTokHandle?: string | null;
