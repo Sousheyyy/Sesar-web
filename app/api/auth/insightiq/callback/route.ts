@@ -14,6 +14,8 @@ import { insightIQClient } from '@/lib/insightiq/client';
 import { prisma } from '@/lib/prisma';
 import { encryptToken } from '@/lib/crypto';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET(req: NextRequest) {
     try {
         const { searchParams } = new URL(req.url);
@@ -94,7 +96,7 @@ export async function GET(req: NextRequest) {
         } else if (userId) {
             // We have a user_id from the state - link TikTok to this user
             console.log(`[InsightIQ] Linking TikTok to user: ${userId}`);
-            
+
             // Check if user exists
             const existingUser = await prisma.user.findUnique({
                 where: { id: userId },
