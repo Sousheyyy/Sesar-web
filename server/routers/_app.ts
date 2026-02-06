@@ -2388,7 +2388,7 @@ export const appRouter = t.router({
         Authorization: authHeader,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ name: userId }),
+      body: JSON.stringify({ external_id: userId, name: userId }),
     });
 
     if (!createRes.ok) {
@@ -2398,29 +2398,26 @@ export const appRouter = t.router({
       // If user already exists (409), try to get existing user
       if (createRes.status === 409) {
         console.log("InsightIQ user already exists, fetching existing user...");
-        const listRes = await fetch(`${INSIGHTIQ_BASE_URL}/v1/users?name=${userId}`, {
+        const listRes = await fetch(`${INSIGHTIQ_BASE_URL}/v1/users/external_id/${userId}`, {
           headers: { Authorization: authHeader },
         });
         if (listRes.ok) {
-          const users = await listRes.json();
-          if (users.data && users.data.length > 0) {
-            const existingUser = users.data[0];
-            // Continue with existing user
-            const tokenRes = await fetch(`${INSIGHTIQ_BASE_URL}/v1/sdk-tokens`, {
-              method: "POST",
-              headers: {
-                Authorization: authHeader,
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({
-                user_id: existingUser.id,
-                products: ["IDENTITY", "IDENTITY.AUDIENCE", "ENGAGEMENT", "ENGAGEMENT.AUDIENCE", "INCOME"],
-              }),
-            });
-            if (tokenRes.ok) {
-              const tokenData = await tokenRes.json();
-              return { token: tokenData.sdk_token as string };
-            }
+          const existingUser = await listRes.json();
+          // Continue with existing user
+          const tokenRes = await fetch(`${INSIGHTIQ_BASE_URL}/v1/sdk-tokens`, {
+            method: "POST",
+            headers: {
+              Authorization: authHeader,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              user_id: existingUser.id,
+              products: ["IDENTITY", "IDENTITY.AUDIENCE", "ENGAGEMENT", "ENGAGEMENT.AUDIENCE", "INCOME"],
+            }),
+          });
+          if (tokenRes.ok) {
+            const tokenData = await tokenRes.json();
+            return { token: tokenData.sdk_token as string };
           }
         }
       }
