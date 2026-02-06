@@ -16,6 +16,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { randomUUID } from 'crypto';
 import { insightIQClient } from '@/lib/insightiq/client';
 
+// TikTok platform ID (hardcoded fallback if API fetch fails)
+const TIKTOK_PLATFORM_ID_FALLBACK = "9bb8913b-ddd9-430b-a66a-d74d846e6c66";
+
 // Cache for TikTok platform ID
 let cachedTikTokPlatformId: string | null = null;
 
@@ -40,10 +43,14 @@ export async function POST(_req: NextRequest) {
         );
         console.log('[InsightIQ Guest] SDK token created');
 
-        // Step 4: Get TikTok platform ID (cached)
+        // Step 4: Get TikTok platform ID (cached, with fallback)
         if (!cachedTikTokPlatformId) {
             console.log('[InsightIQ Guest] Fetching TikTok platform ID...');
             cachedTikTokPlatformId = await insightIQClient.getTikTokPlatformId();
+            if (!cachedTikTokPlatformId) {
+                console.log('[InsightIQ Guest] Using fallback TikTok platform ID');
+                cachedTikTokPlatformId = TIKTOK_PLATFORM_ID_FALLBACK;
+            }
         }
 
         // Determine environment
