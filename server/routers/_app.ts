@@ -2363,6 +2363,183 @@ export const appRouter = t.router({
 
       return { success: true };
     }),
+
+  // ─── InsightIQ (Phyllo) Integration ───────────────────────────────────
+
+  // Create InsightIQ SDK token for authenticated users
+  createInsightIQToken: t.procedure.mutation(async ({ ctx }) => {
+    const userId = ctx.user?.id;
+    if (!userId) throw new Error("UNAUTHORIZED");
+
+    const INSIGHTIQ_BASE_URL = process.env.INSIGHTIQ_BASE_URL || "https://api.staging.insightiq.ai";
+    const clientId = process.env.INSIGHTIQ_CLIENT_ID;
+    const clientSecret = process.env.INSIGHTIQ_CLIENT_SECRET;
+
+    if (!clientId || !clientSecret) {
+      throw new Error("Missing InsightIQ credentials");
+    }
+
+    const authHeader = `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`;
+
+    // Check if user already has a Phyllo user ID
+    const currentUser = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { phylloUserId: true },
+    });
+
+    let phylloUserId = currentUser?.phylloUserId;
+
+    // First-time setup: create a Phyllo user
+    if (!phylloUserId) {
+      const createRes = await fetch(`${INSIGHTIQ_BASE_URL}/users`, {
+        method: "POST",
+        headers: {
+          Authorization: authHeader,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ name: userId }),
+      });
+
+      if (!createRes.ok) {
+        console.error("InsightIQ user creation failed:", await createRes.text());
+        throw new Error("Failed to create InsightIQ user");
+      }
+
+      const created = await createRes.json();
+      phylloUserId = created.id;
+
+      await prisma.user.update({
+        where: { id: userId },
+        data: { phylloUserId },
+      });
+    }
+
+    // Issue SDK token
+    const tokenRes = await fetch(`${INSIGHTIQ_BASE_URL}/sdk-tokens`, {
+      method: "POST",
+      headers: {
+        Authorization: authHeader,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        user_id: phylloUserId,
+        products: ["IDENTITY", "IDENTITY.AUDIENCE", "ENGAGEMENT", "ENGAGEMENT.AUDIENCE", "INCOME"],
+      }),
+    });
+
+    if (!tokenRes.ok) {
+      console.error("InsightIQ token creation failed:", await tokenRes.text());
+      throw new Error("Failed to create InsightIQ token");
+    }
+
+    const tokenData = await tokenRes.json();
+    return { token: tokenData.sdk_token as string };
+  }),
+
+  // Link InsightIQ account after successful connect flow
+  linkInsightIQAccount: t.procedure
+    .input(z.object({
+      accountId: z.string(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const userId = ctx.user?.id;
+      if (!userId) throw new Error("UNAUTHORIZED");
+
+      const INSIGHTIQ_BASE_URL = process.env.INSIGHTIQ_BASE_URL || "https://api.staging.insightiq.ai";
+      const clientId = process.env.INSIGHTIQ_CLIENT_ID;
+      const clientSecret = process.env.INSIGHTIQ_CLIENT_SECRET;
+
+      if (!clientId || !clientSecret) {
+        throw new Error("Missing InsightIQ credentials");
+      }
+
+      const authHeader = `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`;
+
+      // Fetch account from InsightIQ
+      const accountRes = await fetch(`${INSIGHTIQ_BASE_URL}/accounts/${input.accountId}`, {
+        headers: {
+          Authorization: authHeader,
+          "Content-Type": "application/json",
+        },
+      });
+
+      if (!accountRes.ok) {
+        console.error("InsightIQ account fetch failed:", await accountRes.text());
+        throw new Error("Failed to fetch InsightIQ account");
+      }
+
+      const account = await accountRes.json();
+      const handle: string | undefined = account.platform_username;
+
+      if (!handle) {
+        console.error("InsightIQ account missing platform_username:", account);
+        throw new Error("Could not resolve TikTok handle from InsightIQ");
+      }
+
+      // Get additional profile data
+      const displayName: string = account.name || handle;
+      const avatar: string | null = account.profile_pic_url || null;
+
+      // Update user with TikTok data
+      await prisma.user.update({
+        where: { id: userId },
+        data: {
+          tiktokHandle: handle,
+          phylloAccountId: input.accountId,
+          name: `@${handle}`, // Set display name to TikTok handle
+          avatar: avatar,
+        },
+      });
+
+      return { tiktokHandle: handle, displayName, avatar };
+    }),
+
+  // Disconnect InsightIQ account
+  disconnectInsightIQAccount: t.procedure.mutation(async ({ ctx }) => {
+    const userId = ctx.user?.id;
+    if (!userId) throw new Error("UNAUTHORIZED");
+
+    const currentUser = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { phylloAccountId: true },
+    });
+
+    // Best-effort revoke on InsightIQ's side
+    if (currentUser?.phylloAccountId) {
+      try {
+        const INSIGHTIQ_BASE_URL = process.env.INSIGHTIQ_BASE_URL || "https://api.staging.insightiq.ai";
+        const clientId = process.env.INSIGHTIQ_CLIENT_ID;
+        const clientSecret = process.env.INSIGHTIQ_CLIENT_SECRET;
+
+        if (clientId && clientSecret) {
+          const authHeader = `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`;
+          await fetch(`${INSIGHTIQ_BASE_URL}/accounts/${currentUser.phylloAccountId}`, {
+            method: "DELETE",
+            headers: { Authorization: authHeader },
+          });
+        }
+      } catch (e) {
+        console.warn("InsightIQ account revoke failed — continuing with local disconnect:", e);
+      }
+    }
+
+    // Clear TikTok data from user
+    await prisma.user.update({
+      where: { id: userId },
+      data: {
+        tiktokHandle: null,
+        phylloAccountId: null,
+        followerCount: null,
+        followingCount: null,
+        totalLikes: null,
+        videoCount: null,
+        creatorTier: null,
+        lastStatsFetchedAt: null,
+      },
+    });
+
+    return { success: true };
+  }),
 });
 
 export type AppRouter = typeof appRouter;
