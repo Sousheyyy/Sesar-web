@@ -54,15 +54,19 @@ export default function LoginPage() {
                 } else if (profile?.role === UserRole.ARTIST) {
                   window.location.href = "/artist/campaigns";
                 } else {
-                  // CREATOR role - redirect to profile or wallet
-                  window.location.href = "/profile";
+                  // CREATOR role - restrict and sign out
+                  await supabase.auth.signOut();
+                  toast.error("İçerik üreticileri mobil uygulamayı kullanmalıdır.");
+                  setIsLoading(false);
                 }
               } else {
                 // Fallback if profile fetch fails
-                window.location.href = "/profile";
+                await supabase.auth.signOut();
+                toast.error("Profil bilgileri alınamadı.");
+                setIsLoading(false);
               }
             } else {
-              window.location.href = "/profile";
+              window.location.href = "/register";
             }
           } catch (sessionError) {
             console.error("Failed to fetch session:", sessionError);

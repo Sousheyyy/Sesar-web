@@ -1,265 +1,160 @@
-import { PrismaClient, UserRole, UserPlan, CampaignStatus } from "@prisma/client";
+import { PrismaClient, UserRole, UserPlan } from "@prisma/client";
+import { createClient } from "@supabase/supabase-js";
 import { hash } from "bcryptjs";
 
 const prisma = new PrismaClient();
 
-async function main() {
-  console.log("🌱 Seeding database...");
+// Initialize Supabase Admin Client
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-  // Create Admin User
+if (!supabaseUrl || !supabaseServiceKey) {
+  console.error("❌ Missing Supabase environment variables. Ensure NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are set.");
+  process.exit(1);
+}
+
+const supabase = createClient(supabaseUrl, supabaseServiceKey, {
+  auth: {
+    autoRefreshToken: false,
+    persistSession: false,
+  },
+});
+
+async function createSupabaseUser(email: string, password: string, name: string) {
+  // 1. Check if user exists in Supabase Auth (by email) to avoid errors
+  // specialized admin listUsers approach or just try create and catch error
+  // safer to try create or getting by email if possible. 
+  // admin.listUsers is strictly rate limited?
+  // We'll try to delete first to ensure fresh start if we want, OR just create and ignore "already exists" if we want to update.
+  // But we want to sync the ID. So we need the ID.
+
+  // Best way for seeding: Delete if exists, then create.
+  // Note: deleting from Supabase Auth might NOT cascade to Prisma if not configured, but our script clears Prisma first.
+
+  // Find user by email first to get ID if exists
+  const { data: { users } } = await supabase.auth.admin.listUsers();
+  const existingUser = users.find(u => u.email === email);
+
+  if (existingUser) {
+    console.log(`   ⚠️ User ${email} already exists in Supabase Auth. Deleting to recreate...`);
+    await supabase.auth.admin.deleteUser(existingUser.id);
+  }
+
+  const { data: { user }, error } = await supabase.auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true,
+    user_metadata: { name },
+  });
+
+  if (error || !user) {
+    throw new Error(`Failed to create Supabase user ${email}: ${error?.message}`);
+  }
+
+  return user.id; // UUID
+}
+
+async function main() {
+  console.log("🌱 Starting database reset and seed (Synced with Supabase Auth)...");
+
+  // 1. Clear Database
+  console.log("🧹 Clearing all Prisma data...");
+
+  // Delete in order to handle any non-cascading relations gracefully
+  await prisma.submission.deleteMany();
+  await prisma.campaignPoolStats.deleteMany();
+  await prisma.campaign.deleteMany();
+  await prisma.song.deleteMany();
+  await prisma.transaction.deleteMany();
+  await prisma.notification.deleteMany();
+  await prisma.marketplaceUsage.deleteMany();
+  await prisma.musicCache.deleteMany();
+  await prisma.apiCallLog.deleteMany();
+  await prisma.user.deleteMany();
+  await prisma.systemSettings.deleteMany();
+
+  console.log("✅ Prisma database cleared");
+
+  // 2. Create Passwords (for Prisma local hash compatibility, though Auth handles login)
   const adminPassword = await hash("admin123", 10);
-  const admin = await prisma.user.upsert({
-    where: { email: "admin@tikpay.com" },
-    update: {},
-    create: {
+  const commonPassword = await hash("user123", 10);
+
+  // 3. Create Admin User
+  console.log("👤 Creating Admin...");
+  const adminId = await createSupabaseUser("admin@tikpay.com", "admin123", "Admin User");
+
+  await prisma.user.create({
+    data: {
+      id: adminId, // LINK WITH SUPABASE AUTH
       email: "admin@tikpay.com",
       password: adminPassword,
       name: "Admin User",
       role: UserRole.ADMIN,
       balance: 0,
+      bio: "System Administrator",
     },
   });
-  console.log("✅ Created admin user:", admin.email);
+  console.log(`   -> Created Admin: admin@tikpay.com (ID: ${adminId})`);
 
-  // Create Test Artist
-  const artistPassword = await hash("artist123", 10);
-  const artist = await prisma.user.upsert({
-    where: { email: "artist@tikpay.com" },
-    update: {},
-    create: {
-      email: "artist@tikpay.com",
-      password: artistPassword,
-      name: "Test Artist",
-      role: UserRole.ARTIST,
-      balance: 10000,
-      plan: UserPlan.ARTIST, // Artist subscription status
-      bio: "I'm a music artist looking to promote my songs",
-      tiktokHandle: "@testartist",
-    },
-  });
-  console.log("✅ Created artist user:", artist.email);
+  // 4. Create Creators
+  console.log("👤 Creating Creators...");
+  for (let i = 2; i <= 3; i++) {
+    const email = `creator${i}@tikpay.com`;
+    const userId = await createSupabaseUser(email, "user123", `Creator ${i}`);
 
-  // Create Test Creator
-  const creatorPassword = await hash("creator123", 10);
-  const creator = await prisma.user.upsert({
-    where: { email: "creator@tikpay.com" },
-    update: {},
-    create: {
-      email: "creator@tikpay.com",
-      password: creatorPassword,
-      name: "Test Creator",
-      role: UserRole.CREATOR,
-      balance: 0,
-      bio: "TikTok content creator",
-      tiktokHandle: "@testcreator",
-    },
-  });
-  console.log("✅ Created creator user:", creator.email);
+    await prisma.user.create({
+      data: {
+        id: userId, // LINK WITH SUPABASE AUTH
+        email: email,
+        password: commonPassword,
+        name: `Creator ${i}`,
+        role: UserRole.CREATOR,
+        balance: 0,
+        bio: `Test Creator account ${i}`,
+        // No TikTok connected
+      },
+    });
+    console.log(`   -> Created Creator: ${email}`);
+  }
 
-  // Create System Settings
+  // 5. Create Artists
+  console.log("👤 Creating Artists...");
+  for (let i = 1; i <= 3; i++) {
+    const email = `artist${i}@tikpay.com`;
+    const userId = await createSupabaseUser(email, "user123", `Artist ${i}`);
+
+    await prisma.user.create({
+      data: {
+        id: userId, // LINK WITH SUPABASE AUTH
+        email: email,
+        password: commonPassword,
+        name: `Artist ${i}`,
+        role: UserRole.ARTIST,
+        balance: 0,
+        plan: UserPlan.ARTIST,
+        bio: `Test Artist account ${i}`,
+        // No TikTok connected
+      },
+    });
+    console.log(`   -> Created Artist: ${email}`);
+  }
+
+  // 6. Create Default System Settings
+  console.log("⚙️  Creating System Settings...");
   const settings = [
-    {
-      key: "min_campaign_budget",
-      value: "50",
-      description: "Minimum budget required to create a campaign (in USD)",
-    },
-    {
-      key: "min_withdrawal_amount",
-      value: "50",
-      description: "Minimum amount required to request withdrawal (in USD)",
-    },
-    {
-      key: "min_cpm",
-      value: "5",
-      description: "Minimum cost per 1000 views (in USD)",
-    },
-    {
-      key: "max_cpm",
-      value: "100",
-      description: "Maximum cost per 1000 views (in USD)",
-    },
-    {
-      key: "platform_fee_percentage",
-      value: "10",
-      description: "Platform fee percentage on transactions",
-    },
+    { key: "min_campaign_budget", value: "50", description: "Minimum budget required to create a campaign (in USD)" },
+    { key: "min_withdrawal_amount", value: "50", description: "Minimum amount required to request withdrawal (in USD)" },
+    { key: "min_cpm", value: "5", description: "Minimum cost per 1000 views (in USD)" },
+    { key: "max_cpm", value: "100", description: "Maximum cost per 1000 views (in USD)" },
+    { key: "platform_fee_percentage", value: "10", description: "Platform fee percentage on transactions" },
   ];
 
   for (const setting of settings) {
-    await prisma.systemSettings.upsert({
-      where: { key: setting.key },
-      update: { value: setting.value },
-      create: setting,
-    });
+    await prisma.systemSettings.create({ data: setting });
   }
-  console.log("✅ Created system settings");
+  console.log("✅ System settings created");
 
-  // Create artist@sesar.com account with mock campaigns
-  const sesarArtistPassword = await hash("artist123", 10);
-  const sesarArtist = await prisma.user.upsert({
-    where: { email: "artist@sesar.com" },
-    update: {},
-    create: {
-      email: "artist@sesar.com",
-      password: sesarArtistPassword,
-      name: "Sesar Artist",
-      role: UserRole.ARTIST,
-      balance: 50000,
-      plan: UserPlan.ARTIST,
-      bio: "Professional music artist creating viral Turkish hits",
-      tiktokHandle: "@sesarartist",
-      avatar: "https://api.dicebear.com/7.x/avataaars/svg?seed=sesarartist",
-    },
-  });
-  console.log("✅ Created/Updated artist@sesar.com");
-
-  // Create mock songs for artist@sesar.com
-  const songs = [
-    {
-      title: "Yalnızlık Paylaşılmaz",
-      duration: 195,
-      authorName: "Sesar Artist",
-      description: "Romantik bir şarkı",
-      tiktokUrl: "https://www.tiktok.com/music/yalnizlik-paylalimaz-7234567890",
-      coverImage: "https://picsum.photos/seed/song1/400/400",
-    },
-    {
-      title: "Gece Mavisi",
-      duration: 210,
-      authorName: "Sesar Artist",
-      description: "Duygusal bir melodi",
-      tiktokUrl: "https://www.tiktok.com/music/gece-mavisi-7234567891",
-      coverImage: "https://picsum.photos/seed/song2/400/400",
-    },
-    {
-      title: "Rüya Gibi",
-      duration: 178,
-      authorName: "Sesar Artist",
-      description: "Dans edilebilir hit şarkı",
-      tiktokUrl: "https://www.tiktok.com/music/ruya-gibi-7234567892",
-      coverImage: "https://picsum.photos/seed/song3/400/400",
-    },
-    {
-      title: "Aşkın Halleri",
-      duration: 203,
-      authorName: "Sesar Artist",
-      description: "Pop tarzı aşk şarkısı",
-      tiktokUrl: "https://www.tiktok.com/music/askin-halleri-7234567893",
-      coverImage: "https://picsum.photos/seed/song4/400/400",
-    },
-  ];
-
-  const createdSongs: any[] = [];
-
-  for (const songData of songs) {
-    // Check if song already exists
-    let song = await prisma.song.findFirst({
-      where: {
-        artistId: sesarArtist.id,
-        title: songData.title,
-      },
-    });
-
-    if (!song) {
-      song = await prisma.song.create({
-        data: {
-          ...songData,
-          artistId: sesarArtist.id,
-        },
-      });
-    }
-    createdSongs.push(song);
-  }
-  console.log(`✅ Created ${createdSongs.length} songs for artist@sesar.com`);
-
-  // Create mock campaigns
-  const now = new Date();
-  const thirtyDaysFromNow = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
-  const fifteenDaysAgo = new Date(now.getTime() - 15 * 24 * 60 * 60 * 1000);
-  const tenDaysFromNow = new Date(now.getTime() + 10 * 24 * 60 * 60 * 1000);
-
-  const campaigns = [
-    {
-      songId: createdSongs[0].id,
-      title: "Viral TikTok Challenge",
-      description: "Şarkımla dans videosu çek ve kazanmaya başla! #YalnızlıkPaylaşılmaz challenge'ına katıl.",
-      totalBudget: 25000,
-      remainingBudget: 18500,
-      status: CampaignStatus.ACTIVE,
-      startDate: fifteenDaysAgo,
-      endDate: thirtyDaysFromNow,
-      minFollowers: 1000,
-      minVideoDuration: 15,
-      platformFeePercent: 20,
-      safetyReservePercent: 5,
-    },
-    {
-      songId: createdSongs[1].id,
-      title: "Gece Temalı Videolar",
-      description: "Gece çekimleriyle özel videolar oluştur. Atmosferik ve duygusal içerikler arıyoruz.",
-      totalBudget: 35000,
-      remainingBudget: 32000,
-      status: CampaignStatus.ACTIVE,
-      startDate: new Date(now.getTime() - 5 * 24 * 60 * 60 * 1000),
-      endDate: new Date(now.getTime() + 25 * 24 * 60 * 60 * 1000),
-      minFollowers: 500,
-      minVideoDuration: 20,
-      platformFeePercent: 20,
-      safetyReservePercent: 5,
-    },
-    {
-      songId: createdSongs[2].id,
-      title: "Dans ve Koreografi",
-      description: "Rüya Gibi şarkısına özgün dans koreografisi oluştur. En yaratıcı danslar ödüllendirilecek!",
-      totalBudget: 18000,
-      remainingBudget: 5200,
-      status: CampaignStatus.COMPLETED,
-      startDate: new Date(now.getTime() - 45 * 24 * 60 * 60 * 1000),
-      endDate: new Date(now.getTime() - 5 * 24 * 60 * 60 * 1000),
-      completedAt: new Date(now.getTime() - 5 * 24 * 60 * 60 * 1000),
-      minFollowers: 0,
-      minVideoDuration: 15,
-      platformFeePercent: 20,
-      safetyReservePercent: 5,
-    },
-    {
-      songId: createdSongs[3].id,
-      title: "Aşk Hikayeleri",
-      description: "Sevgilinle veya arkadaşınla çek! Aşkın farklı hallerini göster.",
-      totalBudget: 15000,
-      remainingBudget: 15000,
-      status: CampaignStatus.PENDING_APPROVAL,
-      startDate: new Date(now.getTime() + 2 * 24 * 60 * 60 * 1000),
-      endDate: new Date(now.getTime() + 32 * 24 * 60 * 60 * 1000),
-      minFollowers: 2000,
-      minVideoDuration: 20,
-      platformFeePercent: 20,
-      safetyReservePercent: 5,
-    },
-  ];
-
-  for (const campaignData of campaigns) {
-    // Check if campaign already exists
-    const existingCampaign = await prisma.campaign.findFirst({
-      where: {
-        artistId: sesarArtist.id,
-        songId: campaignData.songId,
-        title: campaignData.title,
-      },
-    });
-
-    if (!existingCampaign) {
-      await prisma.campaign.create({
-        data: {
-          ...campaignData,
-          artistId: sesarArtist.id,
-        },
-      });
-    }
-  }
-  console.log(`✅ Created ${campaigns.length} campaigns for artist@sesar.com`);
-
-  console.log("🎉 Seeding completed!");
+  console.log("🎉 Seeding completed successfully!");
 }
 
 main()
@@ -270,16 +165,3 @@ main()
   .finally(async () => {
     await prisma.$disconnect();
   });
-
-
-
-
-
-
-
-
-
-
-
-
-

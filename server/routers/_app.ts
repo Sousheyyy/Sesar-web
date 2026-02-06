@@ -2537,13 +2537,20 @@ export const appRouter = t.router({
 
   // Disconnect InsightIQ account
   disconnectInsightIQAccount: t.procedure.mutation(async ({ ctx }) => {
+    console.log("[DisconnectInsightIQ] Starting disconnect mutation...");
     const userId = ctx.user?.id;
-    if (!userId) throw new Error("UNAUTHORIZED");
+    console.log("[DisconnectInsightIQ] User ID:", userId);
+
+    if (!userId) {
+      console.error("[DisconnectInsightIQ] UNAUTHORIZED - no user ID");
+      throw new Error("UNAUTHORIZED");
+    }
 
     const currentUser = await prisma.user.findUnique({
       where: { id: userId },
-      select: { tiktokUserId: true },
+      select: { tiktokUserId: true, tiktokHandle: true },
     });
+    console.log("[DisconnectInsightIQ] Current user TikTok data:", currentUser);
 
     // Best-effort revoke on InsightIQ's side
     if (currentUser?.tiktokUserId) {
@@ -2554,34 +2561,48 @@ export const appRouter = t.router({
 
         if (clientId && clientSecret) {
           const authHeader = `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`;
-          await fetch(`${INSIGHTIQ_BASE_URL}/v1/accounts/${currentUser.tiktokUserId}`, {
+          console.log("[DisconnectInsightIQ] Attempting to revoke account on InsightIQ:", currentUser.tiktokUserId);
+          const revokeRes = await fetch(`${INSIGHTIQ_BASE_URL}/v1/accounts/${currentUser.tiktokUserId}`, {
             method: "DELETE",
             headers: { Authorization: authHeader },
           });
+          console.log("[DisconnectInsightIQ] InsightIQ revoke response:", revokeRes.status);
         }
       } catch (e) {
-        console.warn("InsightIQ account revoke failed — continuing with local disconnect:", e);
+        console.warn("[DisconnectInsightIQ] InsightIQ account revoke failed — continuing with local disconnect:", e);
       }
+    } else {
+      console.log("[DisconnectInsightIQ] No tiktokUserId found, skipping InsightIQ revoke");
     }
 
     // Clear TikTok data from user (use 0 for non-nullable Int fields)
+    console.log("[DisconnectInsightIQ] Clearing TikTok data from database...");
     await prisma.user.update({
       where: { id: userId },
       data: {
+        // TikTok profile data
         tiktokHandle: null,
         tiktokUserId: null,
         tiktokUsername: null,
         tiktokDisplayName: null,
         tiktokAvatarUrl: null,
         tiktokConnectedAt: null,
+        // InsightIQ tokens
+        insightiqAccessToken: null,
+        insightiqRefreshToken: null,
+        insightiqTokenExpiry: null,
+        // Stats
         followerCount: 0,
         followingCount: 0,
         totalLikes: 0,
         videoCount: 0,
         creatorTier: null,
         lastStatsFetchedAt: null,
+        // Reset profile if it was set from TikTok
+        avatar: null,
       },
     });
+    console.log("[DisconnectInsightIQ] Database updated successfully!");
 
     return { success: true };
   }),
