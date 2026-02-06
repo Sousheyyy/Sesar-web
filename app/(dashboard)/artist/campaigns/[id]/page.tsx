@@ -321,10 +321,12 @@ export default async function CampaignDetailPage({
               </div>
 
               <div className="space-y-2">
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <Clock className="h-4 w-4" />
-                  <span>{formatDuration(campaign.song.duration)}</span>
-                </div>
+                {campaign.song.duration !== null && (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Clock className="h-4 w-4" />
+                    <span>{formatDuration(campaign.song.duration)}</span>
+                  </div>
+                )}
               </div>
 
               {campaign.song.tiktokUrl && (
