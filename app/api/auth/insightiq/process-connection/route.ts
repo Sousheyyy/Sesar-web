@@ -64,7 +64,7 @@ export async function POST(req: NextRequest) {
         console.log('[InsightIQ] TikTok account connected:', tiktokAccount.account_id);
 
         // Try to fetch account details from InsightIQ
-        let accountDetails = null;
+        let accountDetails: any = null;
         try {
             accountDetails = await insightIQClient.getAccount(tiktokAccount.account_id);
             console.log('[InsightIQ] Account details:', accountDetails);
