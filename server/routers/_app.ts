@@ -2381,38 +2381,23 @@ export const appRouter = t.router({
 
     const authHeader = `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`;
 
-    // Check if user already has a Phyllo user ID
-    const currentUser = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { phylloUserId: true },
+    // Create InsightIQ user (InsightIQ handles deduplication by name)
+    const createRes = await fetch(`${INSIGHTIQ_BASE_URL}/users`, {
+      method: "POST",
+      headers: {
+        Authorization: authHeader,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ name: userId }),
     });
 
-    let phylloUserId = currentUser?.phylloUserId;
-
-    // First-time setup: create a Phyllo user
-    if (!phylloUserId) {
-      const createRes = await fetch(`${INSIGHTIQ_BASE_URL}/users`, {
-        method: "POST",
-        headers: {
-          Authorization: authHeader,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ name: userId }),
-      });
-
-      if (!createRes.ok) {
-        console.error("InsightIQ user creation failed:", await createRes.text());
-        throw new Error("Failed to create InsightIQ user");
-      }
-
-      const created = await createRes.json();
-      phylloUserId = created.id;
-
-      await prisma.user.update({
-        where: { id: userId },
-        data: { phylloUserId },
-      });
+    if (!createRes.ok) {
+      console.error("InsightIQ user creation failed:", await createRes.text());
+      throw new Error("Failed to create InsightIQ user");
     }
+
+    const created = await createRes.json();
+    const insightiqUserId = created.id;
 
     // Issue SDK token
     const tokenRes = await fetch(`${INSIGHTIQ_BASE_URL}/sdk-tokens`, {
@@ -2422,7 +2407,7 @@ export const appRouter = t.router({
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        user_id: phylloUserId,
+        user_id: insightiqUserId,
         products: ["IDENTITY", "IDENTITY.AUDIENCE", "ENGAGEMENT", "ENGAGEMENT.AUDIENCE", "INCOME"],
       }),
     });
@@ -2480,12 +2465,16 @@ export const appRouter = t.router({
       const displayName: string = account.name || handle;
       const avatar: string | null = account.profile_pic_url || null;
 
-      // Update user with TikTok data
+      // Update user with TikTok data (using existing schema fields)
       await prisma.user.update({
         where: { id: userId },
         data: {
           tiktokHandle: handle,
-          phylloAccountId: input.accountId,
+          tiktokUserId: input.accountId, // Store InsightIQ account ID here
+          tiktokUsername: handle,
+          tiktokDisplayName: displayName,
+          tiktokAvatarUrl: avatar,
+          tiktokConnectedAt: new Date(),
           name: `@${handle}`, // Set display name to TikTok handle
           avatar: avatar,
         },
@@ -2501,11 +2490,11 @@ export const appRouter = t.router({
 
     const currentUser = await prisma.user.findUnique({
       where: { id: userId },
-      select: { phylloAccountId: true },
+      select: { tiktokUserId: true },
     });
 
     // Best-effort revoke on InsightIQ's side
-    if (currentUser?.phylloAccountId) {
+    if (currentUser?.tiktokUserId) {
       try {
         const INSIGHTIQ_BASE_URL = process.env.INSIGHTIQ_BASE_URL || "https://api.staging.insightiq.ai";
         const clientId = process.env.INSIGHTIQ_CLIENT_ID;
@@ -2513,7 +2502,7 @@ export const appRouter = t.router({
 
         if (clientId && clientSecret) {
           const authHeader = `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`;
-          await fetch(`${INSIGHTIQ_BASE_URL}/accounts/${currentUser.phylloAccountId}`, {
+          await fetch(`${INSIGHTIQ_BASE_URL}/accounts/${currentUser.tiktokUserId}`, {
             method: "DELETE",
             headers: { Authorization: authHeader },
           });
@@ -2528,7 +2517,11 @@ export const appRouter = t.router({
       where: { id: userId },
       data: {
         tiktokHandle: null,
-        phylloAccountId: null,
+        tiktokUserId: null,
+        tiktokUsername: null,
+        tiktokDisplayName: null,
+        tiktokAvatarUrl: null,
+        tiktokConnectedAt: null,
         followerCount: null,
         followingCount: null,
         totalLikes: null,
