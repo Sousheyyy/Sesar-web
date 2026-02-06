@@ -57,7 +57,7 @@ export const appRouter = t.router({
 
       const currentUser = await prisma.user.findUnique({
         where: { id: userId },
-        select: { 
+        select: {
           tiktok_access_token: true,
           tiktok_refresh_token: true,
           tiktok_token_expires_at: true,
@@ -89,7 +89,7 @@ export const appRouter = t.router({
         const newTokens = await tiktokAPI.refreshAccessToken(
           currentUser.tiktok_refresh_token!
         );
-        
+
         accessToken = newTokens.access_token;
         await prisma.user.update({
           where: { id: userId },
@@ -818,7 +818,7 @@ export const appRouter = t.router({
 
       // Extract video metadata
       const { tiktokMetadata } = await import("@/lib/tiktok-metadata");
-      
+
       let videoData;
       try {
         videoData = await tiktokMetadata.getVideoMetadata(input.tiktokUrl);
@@ -1704,8 +1704,11 @@ export const appRouter = t.router({
           throw new Error("Marketplace analysis tools are currently unavailable");
 
           // 1. Fetch User Info (for Follower Count)
+          const apiKey = process.env.TIKAPI_KEY;
+          if (!apiKey) throw new Error("Missing TikAPI Key");
+
           const userRes = await fetch(`https://api.tikapi.io/public/check?username=${input.input}`, {
-            headers: { "X-API-KEY": apiKey }
+            headers: { "X-API-KEY": apiKey || '' }
           });
           if (!userRes.ok) throw new Error(`TikAPI Check Error: ${userRes.statusText}`);
           const userData = await userRes.json();
@@ -1725,7 +1728,7 @@ export const appRouter = t.router({
           const queryParam = secUid ? `secUid=${encodeURIComponent(secUid)}` : `username=${encodeURIComponent(userInfo.user?.uniqueId || input.input)}`;
 
           const postsRes = await fetch(`https://api.tikapi.io/public/posts?${queryParam}`, {
-            headers: { "X-API-KEY": apiKey }
+            headers: { "X-API-KEY": apiKey || '' }
           });
 
           if (!postsRes.ok) {
@@ -1820,7 +1823,10 @@ export const appRouter = t.router({
           throw new Error("Marketplace analysis tools are currently unavailable");
 
           // 1. Check User
-          const userRes = await fetch(`https://api.tikapi.io/public/check?username=${input.input}`, { headers: { "X-API-KEY": apiKey } });
+          const apiKey = process.env.TIKAPI_KEY;
+          if (!apiKey) throw new Error("Missing TikAPI Key");
+
+          const userRes = await fetch(`https://api.tikapi.io/public/check?username=${input.input}`, { headers: { "X-API-KEY": apiKey || '' } });
           if (!userRes.ok) throw new Error("User Check Failed");
           const userData = await userRes.json();
           const userInfo = userData.userInfo;
@@ -1830,7 +1836,7 @@ export const appRouter = t.router({
           const secUid = userInfo.user?.secUid;
           const target = secUid ? `secUid=${encodeURIComponent(secUid)}` : `username=${encodeURIComponent(userInfo.user?.uniqueId || input.input)}`;
 
-          const postsRes = await fetch(`https://api.tikapi.io/public/posts?${target}&count=15`, { headers: { "X-API-KEY": apiKey } }); // Fetch a few more to ensure we get 10 valid
+          const postsRes = await fetch(`https://api.tikapi.io/public/posts?${target}&count=15`, { headers: { "X-API-KEY": apiKey || '' } }); // Fetch a few more to ensure we get 10 valid
           if (!postsRes.ok) throw new Error("Posts Fetch Failed");
           const postsData = await postsRes.json();
           const allPosts = postsData.itemList || [];
@@ -1933,12 +1939,13 @@ export const appRouter = t.router({
           let videoId = input.input;
           if (input.input.includes("tiktok.com")) {
             const match = input.input.match(/\/video\/(\d+)/);
-            if (match) videoId = match[1];
+            if (match) videoId = match![1];
           }
 
           // Fetch Video Details
+          const apiKey = process.env.TIKAPI_KEY;
           const vidRes = await fetch(`https://api.tikapi.io/public/video?id=${videoId}`, {
-            headers: { "X-API-KEY": apiKey }
+            headers: { "X-API-KEY": apiKey || '' }
           });
 
           if (!vidRes.ok) throw new Error("Video not found or API error");
@@ -2001,7 +2008,7 @@ export const appRouter = t.router({
               console.warn("GOOGLE_AI_API_KEY is missing/empty.");
               resultData.scores.aiAnalysis = "API anahtarı eksik, analiz yapılamadı.";
             } else {
-              const genAI = new GoogleGenerativeAI(apiKey);
+              const genAI = new GoogleGenerativeAI(apiKey!);
               const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
               const prompt = `
@@ -2040,9 +2047,11 @@ export const appRouter = t.router({
 
           // Helper function to analyze a user
           const analyzeUser = async (username: string) => {
+            const apiKey = process.env.TIKAPI_KEY;
+
             // 1. Check User to get stats and secUid
             const userRes = await fetch(`https://api.tikapi.io/public/check?username=${encodeURIComponent(username.trim())}`, {
-              headers: { "X-API-KEY": apiKey }
+              headers: { "X-API-KEY": apiKey || '' }
             });
             if (!userRes.ok) throw new Error(`User ${username} check failed`);
             const userData = await userRes.json();
@@ -2055,7 +2064,7 @@ export const appRouter = t.router({
               : `username=${encodeURIComponent(userInfo.user.uniqueId)}`;
 
             const postsRes = await fetch(`https://api.tikapi.io/public/posts?${target}&count=15`, {
-              headers: { "X-API-KEY": apiKey }
+              headers: { "X-API-KEY": apiKey || '' }
             });
             const postsData = await postsRes.json();
             const allPosts = postsData.itemList || [];

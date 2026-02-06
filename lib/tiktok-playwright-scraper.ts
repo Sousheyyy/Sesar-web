@@ -59,7 +59,7 @@ export class TikTokPlaywrightScraper {
 
     try {
       console.log('Navigating to:', url);
-      
+
       // Navigate to page with timeout
       await page.goto(url, {
         waitUntil: 'domcontentloaded',
@@ -85,7 +85,7 @@ export class TikTokPlaywrightScraper {
         const countEl = document.querySelector('h2[data-e2e="music-video-count"]');
         const countText = countEl?.textContent?.trim() || null;
         let videoCount: number | null = null;
-        
+
         if (countText) {
           // Extract number from text like "317K videolar" or "1.2M videos" or "1234 videos"
           const match = countText.match(/([\d,.]+)\s*([KMB]?)/i);
@@ -102,7 +102,7 @@ export class TikTokPlaywrightScraper {
         // Try to find cover image - TikTok shows video thumbnails, use first video thumbnail
         // or look for music artwork in various places
         let coverUrl: string | null = null;
-        
+
         // Method 1: Try to find music artwork/cover
         const musicCoverSelectors = [
           'img[class*="MusicCover"]',
@@ -110,7 +110,7 @@ export class TikTokPlaywrightScraper {
           '[class*="music-info"] img',
           '[class*="MusicInfo"] img',
         ];
-        
+
         for (const selector of musicCoverSelectors) {
           const img = document.querySelector(selector) as HTMLImageElement;
           if (img?.src && img.src.includes('tiktokcdn')) {
@@ -118,7 +118,7 @@ export class TikTokPlaywrightScraper {
             break;
           }
         }
-        
+
         // Method 2: If no dedicated cover, use first video thumbnail (common for music pages)
         if (!coverUrl) {
           const firstVideoThumb = document.querySelector('img[alt*="Taca Nela"], img[src*="tiktokcdn"]') as HTMLImageElement;
@@ -126,7 +126,7 @@ export class TikTokPlaywrightScraper {
             coverUrl = firstVideoThumb.src;
           }
         }
-        
+
         // Method 3: Fallback to og:image
         if (!coverUrl) {
           const ogImage = document.querySelector('meta[property="og:image"]');
@@ -159,7 +159,7 @@ export class TikTokPlaywrightScraper {
         title: data.title || this.extractTitleFromUrl(url),
         authorName: data.artist || 'Unknown Artist',
         coverUrl: data.coverUrl || '',
-        videoCount: data.videoCount,
+        videoCount: data.videoCount ?? undefined,
       };
 
       console.log('Final result:', result);

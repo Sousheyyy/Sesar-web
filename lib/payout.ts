@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { Decimal } from "@prisma/client/runtime/library";
+import { tiktokMetadata } from "@/lib/tiktok-metadata";
 
 /**
  * Calculate the Impact Score for a submission based on the weighted engagement model
@@ -367,16 +368,16 @@ export async function refreshCampaignMetrics(campaignId: string) {
       await new Promise(resolve => setTimeout(resolve, 200));
 
       // Fetch fresh video data
-      const videoData = await tiktokScraper.verifyVideo(submission.tiktokUrl);
+      const videoData = await tiktokMetadata.getVideoMetadata(submission.tiktokUrl);
 
       // Update metrics
       await prisma.submission.update({
         where: { id: submission.id },
         data: {
-          lastViewCount: videoData.views,
-          lastLikeCount: videoData.likes,
-          lastCommentCount: videoData.comments,
-          lastShareCount: videoData.shares,
+          lastViewCount: videoData.stats.views,
+          lastLikeCount: videoData.stats.likes,
+          lastCommentCount: videoData.stats.comments,
+          lastShareCount: videoData.stats.shares,
           lastCheckedAt: new Date(),
         },
       });

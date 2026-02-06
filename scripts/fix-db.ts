@@ -45,7 +45,7 @@ async function main() {
 
         let duplicatesFound = 0;
 
-        for (const [key, ids] of valueMap.entries()) {
+        for (const [key, ids] of Array.from(valueMap.entries())) {
             if (ids.length > 1) {
                 console.log(`⚠️ Duplicate found: "${key}" used in ${ids.length} songs`);
                 duplicatesFound++;
@@ -86,7 +86,7 @@ async function main() {
             }
 
             let userDupes = 0;
-            for (const [k, ids] of userMap.entries()) {
+            for (const [k, ids] of Array.from(userMap.entries())) {
                 if (ids.length > 1) {
                     console.log(`⚠️ Duplicate tiktokUserId found: "${k}"`);
                     await prisma.user.updateMany({

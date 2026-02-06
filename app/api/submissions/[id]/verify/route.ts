@@ -154,13 +154,13 @@ export async function POST(
     // Check duration requirement
     if (
       submission.campaign.minVideoDuration &&
-      videoData.duration < submission.campaign.minVideoDuration
+      videoMetadata.duration < submission.campaign.minVideoDuration
     ) {
       await prisma.submission.update({
         where: { id: params.id },
         data: {
           status: "REJECTED",
-          rejectionReason: `Video süresi (${videoData.duration}sn) gereken süreden (${submission.campaign.minVideoDuration}sn) kısa`,
+          rejectionReason: `Video süresi (${videoMetadata.duration}sn) gereken süreden (${submission.campaign.minVideoDuration}sn) kısa`,
           verified: false,
         },
       });

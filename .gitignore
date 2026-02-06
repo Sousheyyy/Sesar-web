@@ -5,3 +5,5 @@ dist
 build
 .vscode
 .idea
+.next
+error.log

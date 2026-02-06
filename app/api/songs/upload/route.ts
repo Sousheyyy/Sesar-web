@@ -109,7 +109,7 @@ export async function POST(req: NextRequest) {
       musicId = musicData.id;
       // Use thumbnail_url from video as cover since audio_track_info may not have cover_url
       thumbnailUrl = musicData.cover_url || videoContent.thumbnail_url;
-      videoCount = videoContent.engagement?.view_count ? 1 : 1;
+      videoCount = videoContent.engagement?.plays ? 1 : 1;
 
       console.log(`[Song Upload] Music extracted from video:`, {
         title: musicData.title,

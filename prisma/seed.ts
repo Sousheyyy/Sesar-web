@@ -1,4 +1,4 @@
-import { PrismaClient, UserRole, UserPlan } from "@prisma/client";
+import { PrismaClient, UserRole, UserPlan, CampaignStatus } from "@prisma/client";
 import { hash } from "bcryptjs";
 
 const prisma = new PrismaClient();
@@ -149,7 +149,8 @@ async function main() {
     },
   ];
 
-  const createdSongs = [];
+  const createdSongs: any[] = [];
+
   for (const songData of songs) {
     // Check if song already exists
     let song = await prisma.song.findFirst({
@@ -158,7 +159,7 @@ async function main() {
         title: songData.title,
       },
     });
-    
+
     if (!song) {
       song = await prisma.song.create({
         data: {
@@ -184,7 +185,7 @@ async function main() {
       description: "Şarkımla dans videosu çek ve kazanmaya başla! #YalnızlıkPaylaşılmaz challenge'ına katıl.",
       totalBudget: 25000,
       remainingBudget: 18500,
-      status: "ACTIVE",
+      status: CampaignStatus.ACTIVE,
       startDate: fifteenDaysAgo,
       endDate: thirtyDaysFromNow,
       minFollowers: 1000,
@@ -198,7 +199,7 @@ async function main() {
       description: "Gece çekimleriyle özel videolar oluştur. Atmosferik ve duygusal içerikler arıyoruz.",
       totalBudget: 35000,
       remainingBudget: 32000,
-      status: "ACTIVE",
+      status: CampaignStatus.ACTIVE,
       startDate: new Date(now.getTime() - 5 * 24 * 60 * 60 * 1000),
       endDate: new Date(now.getTime() + 25 * 24 * 60 * 60 * 1000),
       minFollowers: 500,
@@ -212,7 +213,7 @@ async function main() {
       description: "Rüya Gibi şarkısına özgün dans koreografisi oluştur. En yaratıcı danslar ödüllendirilecek!",
       totalBudget: 18000,
       remainingBudget: 5200,
-      status: "COMPLETED",
+      status: CampaignStatus.COMPLETED,
       startDate: new Date(now.getTime() - 45 * 24 * 60 * 60 * 1000),
       endDate: new Date(now.getTime() - 5 * 24 * 60 * 60 * 1000),
       completedAt: new Date(now.getTime() - 5 * 24 * 60 * 60 * 1000),
@@ -227,7 +228,7 @@ async function main() {
       description: "Sevgilinle veya arkadaşınla çek! Aşkın farklı hallerini göster.",
       totalBudget: 15000,
       remainingBudget: 15000,
-      status: "PENDING_APPROVAL",
+      status: CampaignStatus.PENDING_APPROVAL,
       startDate: new Date(now.getTime() + 2 * 24 * 60 * 60 * 1000),
       endDate: new Date(now.getTime() + 32 * 24 * 60 * 60 * 1000),
       minFollowers: 2000,
@@ -246,7 +247,7 @@ async function main() {
         title: campaignData.title,
       },
     });
-    
+
     if (!existingCampaign) {
       await prisma.campaign.create({
         data: {

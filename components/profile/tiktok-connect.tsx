@@ -48,14 +48,14 @@ export function TikTokConnect() {
 
     // Check for success/error params from OAuth callback (legacy support)
     useEffect(() => {
-        if (searchParams.get("success") === "tiktok_connected") {
+        if (searchParams?.get("success") === "tiktok_connected") {
             toast.success("TikTok hesabı başarıyla bağlandı!");
             router.replace("/profile");
             checkStatus();
-        } else if (searchParams.get("error") === "tiktok_connection_failed") {
+        } else if (searchParams?.get("error") === "tiktok_connection_failed") {
             toast.error("TikTok bağlantısı başarısız oldu");
-        } else if (searchParams.get("error")) {
-            const errorDetails = searchParams.get("details");
+        } else if (searchParams?.get("error")) {
+            const errorDetails = searchParams?.get("details");
             toast.error(errorDetails || "TikTok bağlantısı başarısız oldu");
         }
     }, [searchParams, router]);
@@ -69,7 +69,7 @@ export function TikTokConnect() {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ userId, accounts }),
             });
-            
+
             if (response.ok) {
                 toast.success("TikTok hesabı başarıyla bağlandı!");
                 checkStatus();
@@ -161,7 +161,7 @@ export function TikTokConnect() {
             console.log('[Phyllo] Initializing SDK with config:', { ...config, token: '***' });
 
             const phylloConnect = window.PhylloConnect.initialize(config);
-            
+
             // Set up event handlers for popup flow
             phylloConnect.on('accountConnected', (accountId: string, workPlatformId: string, userId: string) => {
                 console.log('[Phyllo] Account connected:', { accountId, workPlatformId, userId });
@@ -184,7 +184,7 @@ export function TikTokConnect() {
             phylloConnect.on('exit', (reason: string, userId: string) => {
                 console.log('[Phyllo] SDK exited:', { reason, userId });
                 setIsLoading(false);
-                
+
                 // Show message based on exit reason
                 if (reason === 'DONE_CLICKED') {
                     // User clicked done - check if connection was successful
@@ -256,86 +256,86 @@ export function TikTokConnect() {
                 onLoad={handleSdkLoad}
                 onError={handleSdkError}
             />
-            
+
             <Card>
                 <CardHeader>
-                <div className="flex items-center justify-between">
-                    <div>
-                        <CardTitle>TikTok Bağlantısı</CardTitle>
-                        <CardDescription>
-                            Kampanyalar oluşturmak ve şarkılarınızı yönetmek için TikTok hesabınızı bağlayın
-                        </CardDescription>
+                    <div className="flex items-center justify-between">
+                        <div>
+                            <CardTitle>TikTok Bağlantısı</CardTitle>
+                            <CardDescription>
+                                Kampanyalar oluşturmak ve şarkılarınızı yönetmek için TikTok hesabınızı bağlayın
+                            </CardDescription>
+                        </div>
+                        {connectionStatus?.connected && (
+                            <Badge variant="secondary" className="bg-green-100 text-green-800 hover:bg-green-100">
+                                <CheckCircle2 className="h-3 w-3 mr-1" />
+                                Bağlı
+                            </Badge>
+                        )}
                     </div>
-                    {connectionStatus?.connected && (
-                        <Badge variant="secondary" className="bg-green-100 text-green-800 hover:bg-green-100">
-                            <CheckCircle2 className="h-3 w-3 mr-1" />
-                            Bağlı
-                        </Badge>
-                    )}
-                </div>
-            </CardHeader>
-            <CardContent>
-                {connectionStatus?.connected ? (
-                    <div className="flex items-center justify-between p-4 border rounded-lg bg-muted/30">
-                        <div className="flex items-center gap-4">
-                            {connectionStatus.user?.avatarUrl ? (
-                                <img
-                                    src={connectionStatus.user.avatarUrl}
-                                    alt="Avatar"
-                                    className="h-12 w-12 rounded-full border"
-                                />
-                            ) : (
-                                <div className="h-12 w-12 rounded-full bg-slate-200 flex items-center justify-center">
-                                    <span className="text-xl font-bold text-slate-500">
-                                        {connectionStatus.user?.displayName?.charAt(0) || "T"}
-                                    </span>
+                </CardHeader>
+                <CardContent>
+                    {connectionStatus?.connected ? (
+                        <div className="flex items-center justify-between p-4 border rounded-lg bg-muted/30">
+                            <div className="flex items-center gap-4">
+                                {connectionStatus.user?.avatarUrl ? (
+                                    <img
+                                        src={connectionStatus.user.avatarUrl}
+                                        alt="Avatar"
+                                        className="h-12 w-12 rounded-full border"
+                                    />
+                                ) : (
+                                    <div className="h-12 w-12 rounded-full bg-slate-200 flex items-center justify-center">
+                                        <span className="text-xl font-bold text-slate-500">
+                                            {connectionStatus.user?.displayName?.charAt(0) || "T"}
+                                        </span>
+                                    </div>
+                                )}
+                                <div>
+                                    <p className="font-semibold">{connectionStatus.user?.displayName}</p>
+                                    <p className="text-sm text-muted-foreground">@{connectionStatus.user?.username}</p>
                                 </div>
-                            )}
-                            <div>
-                                <p className="font-semibold">{connectionStatus.user?.displayName}</p>
-                                <p className="text-sm text-muted-foreground">@{connectionStatus.user?.username}</p>
                             </div>
+                            <Button
+                                variant="outline"
+                                className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                                onClick={handleDisconnect}
+                                disabled={isLoading}
+                            >
+                                <LogOut className="h-4 w-4 mr-2" />
+                                Bağlantıyı Kes
+                            </Button>
                         </div>
-                        <Button
-                            variant="outline"
-                            className="text-red-600 hover:text-red-700 hover:bg-red-50"
-                            onClick={handleDisconnect}
-                            disabled={isLoading}
-                        >
-                            <LogOut className="h-4 w-4 mr-2" />
-                            Bağlantıyı Kes
-                        </Button>
-                    </div>
-                ) : (
-                    <div className="space-y-4">
-                        <div className="flex items-center gap-2 p-3 text-sm text-amber-600 bg-amber-50 rounded-md border border-amber-200">
-                            <AlertCircle className="h-4 w-4 shrink-0" />
-                            <p>Şarkılarınızı otomatik olarak doğrulamak için hesabınızı bağlamanız gerekmektedir.</p>
-                        </div>
+                    ) : (
+                        <div className="space-y-4">
+                            <div className="flex items-center gap-2 p-3 text-sm text-amber-600 bg-amber-50 rounded-md border border-amber-200">
+                                <AlertCircle className="h-4 w-4 shrink-0" />
+                                <p>Şarkılarınızı otomatik olarak doğrulamak için hesabınızı bağlamanız gerekmektedir.</p>
+                            </div>
 
-                        <Button
-                            className="w-full bg-black hover:bg-black/90 text-white gap-2"
-                            onClick={handleConnect}
-                            disabled={isLoading}
-                        >
-                            {isLoading ? (
-                                <>
-                                    <Loader2 className="h-4 w-4 animate-spin" />
-                                    Bağlanıyor...
-                                </>
-                            ) : (
-                                <>
-                                    <svg className="h-5 w-5 fill-current" viewBox="0 0 24 24">
-                                        <path d="M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 0 1-5.2 1.74 2.89 2.89 0 0 1 2.31-4.64 2.93 2.93 0 0 1 .88.13V9.4a6.84 6.84 0 0 0-1-.05A6.33 6.33 0 0 0 5 20.1a6.34 6.34 0 0 0 10.86-4.43v-7a8.16 8.16 0 0 0 4.77 1.52v-3.4a4.85 4.85 0 0 1-1-.1z" />
-                                    </svg>
-                                    TikTok ile Bağlan
-                                </>
-                            )}
-                        </Button>
-                    </div>
-                )}
-            </CardContent>
-        </Card>
+                            <Button
+                                className="w-full bg-black hover:bg-black/90 text-white gap-2"
+                                onClick={handleConnect}
+                                disabled={isLoading}
+                            >
+                                {isLoading ? (
+                                    <>
+                                        <Loader2 className="h-4 w-4 animate-spin" />
+                                        Bağlanıyor...
+                                    </>
+                                ) : (
+                                    <>
+                                        <svg className="h-5 w-5 fill-current" viewBox="0 0 24 24">
+                                            <path d="M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 0 1-5.2 1.74 2.89 2.89 0 0 1 2.31-4.64 2.93 2.93 0 0 1 .88.13V9.4a6.84 6.84 0 0 0-1-.05A6.33 6.33 0 0 0 5 20.1a6.34 6.34 0 0 0 10.86-4.43v-7a8.16 8.16 0 0 0 4.77 1.52v-3.4a4.85 4.85 0 0 1-1-.1z" />
+                                        </svg>
+                                        TikTok ile Bağlan
+                                    </>
+                                )}
+                            </Button>
+                        </div>
+                    )}
+                </CardContent>
+            </Card>
         </>
     );
 }

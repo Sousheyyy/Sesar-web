@@ -92,40 +92,40 @@ export class TikTokMetadataService {
           'Accept-Language': 'en-US,en;q=0.9',
         }
       });
-      
+
       if (!response.ok) {
         console.warn('Failed to fetch music page for metadata scraping, status:', response.status);
         return {};
       }
-      
+
       const html = await response.text();
-      
+
       // Log a sample of the HTML to help debug
       console.log('HTML sample (first 500 chars):', html.substring(0, 500));
-      
+
       // First, try the simplest approach - Open Graph meta tags (most reliable)
       console.log('Trying Open Graph tags first...');
       const ogImageMatch = html.match(/<meta\s+property="og:image"\s+content="([^"]+)"/i);
       const ogTitleMatch = html.match(/<meta\s+property="og:title"\s+content="([^"]+)"/i);
       const ogDescMatch = html.match(/<meta\s+property="og:description"\s+content="([^"]+)"/i);
-      
+
       console.log('OG tags found:', {
         image: ogImageMatch?.[1],
         title: ogTitleMatch?.[1],
         description: ogDescMatch?.[1]
       });
-      
+
       // Extract artist from title if available
       let extractedArtist: string | undefined;
       let extractedTitle: string | undefined;
-      
+
       if (ogTitleMatch) {
         const titleText = ogTitleMatch[1];
         // Try patterns like "Title - Artist", "Title · Artist", or "Title | TikTok"
         const dashSplit = titleText.split(' - ');
         const dotSplit = titleText.split(' · ');
         const pipeSplit = titleText.split(' | ');
-        
+
         if (dashSplit.length >= 2 && !dashSplit[1].includes('TikTok')) {
           extractedTitle = dashSplit[0].trim();
           extractedArtist = dashSplit[1].trim();
@@ -139,14 +139,14 @@ export class TikTokMetadataService {
           extractedTitle = titleText.replace(/\s*\|\s*TikTok.*$/i, '').trim();
         }
       }
-      
+
       // Try to get artist from description
       if (ogDescMatch && !extractedArtist) {
         const desc = ogDescMatch[1];
         // Look for patterns like "Artist Name · Song Name" or "by Artist Name"
         const byMatch = desc.match(/by\s+([^·|]+)/i);
         const dotMatch = desc.match(/([^·]+)\s*·/);
-        
+
         if (byMatch) {
           extractedArtist = byMatch[1].trim();
         } else if (dotMatch) {
@@ -157,7 +157,7 @@ export class TikTokMetadataService {
           }
         }
       }
-      
+
       // If we have cover and at least title or artist from OG tags, return it
       if (ogImageMatch && (extractedTitle || extractedArtist)) {
         console.log('Successfully extracted from OG tags:', {
@@ -171,7 +171,7 @@ export class TikTokMetadataService {
           authorName: extractedArtist
         };
       }
-      
+
       // TikTok embeds data in __UNIVERSAL_DATA_FOR_REHYDRATION__ or SIGI_STATE
       // Try to extract the initial state data
       const sigiStateMatch = html.match(/<script\s+id="SIGI_STATE"[^>]*>(.*?)<\/script>/i);
@@ -179,7 +179,7 @@ export class TikTokMetadataService {
         try {
           const stateData = JSON.parse(sigiStateMatch[1]);
           console.log('Found SIGI_STATE, keys:', Object.keys(stateData));
-          
+
           // Navigate through the state to find music data
           if (stateData.MusicModule) {
             const musicData = Object.values(stateData.MusicModule)[0] as any;
@@ -195,19 +195,19 @@ export class TikTokMetadataService {
           console.warn('Failed to parse SIGI_STATE:', e);
         }
       }
-      
+
       // Try __UNIVERSAL_DATA_FOR_REHYDRATION__
       const universalDataMatch = html.match(/<script\s+id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>(.*?)<\/script>/i);
       if (universalDataMatch) {
         try {
           const universalData = JSON.parse(universalDataMatch[1]);
           console.log('Found UNIVERSAL_DATA, keys:', Object.keys(universalData));
-          
+
           // Music data might be nested differently - try multiple paths
           const defaultScope = universalData?.__DEFAULT_SCOPE__;
           if (defaultScope) {
             console.log('DEFAULT_SCOPE keys:', Object.keys(defaultScope));
-            
+
             // Try webapp.music-detail
             if (defaultScope['webapp.music-detail']) {
               const musicDetail = defaultScope['webapp.music-detail'];
@@ -222,7 +222,7 @@ export class TikTokMetadataService {
                 };
               }
             }
-            
+
             // Try to find music data in any key that contains "music"
             for (const key of Object.keys(defaultScope)) {
               if (key.toLowerCase().includes('music')) {
@@ -247,7 +247,7 @@ export class TikTokMetadataService {
           console.warn('Failed to parse UNIVERSAL_DATA:', e);
         }
       }
-      
+
       // Last resort fallback: If we at least have an image, return it
       if (ogImageMatch) {
         console.log('Last resort: returning just the cover image from OG tags');
@@ -257,22 +257,22 @@ export class TikTokMetadataService {
           authorName: extractedArtist
         };
       }
-      
+
       // Fallback: Try Twitter card
       const twitterImageMatch = html.match(/<meta\s+name="twitter:image"\s+content="([^"]+)"/i);
       const twitterTitleMatch = html.match(/<meta\s+name="twitter:title"\s+content="([^"]+)"/i);
-      
+
       if (twitterImageMatch || twitterTitleMatch) {
-        console.log('Extracted from Twitter tags:', { 
-          coverUrl: twitterImageMatch?.[1], 
-          title: twitterTitleMatch?.[1] 
+        console.log('Extracted from Twitter tags:', {
+          coverUrl: twitterImageMatch?.[1],
+          title: twitterTitleMatch?.[1]
         });
         return {
           coverUrl: twitterImageMatch?.[1],
           title: twitterTitleMatch?.[1]
         };
       }
-      
+
       console.warn('No metadata found in TikTok page');
       return {};
     } catch (error) {
@@ -290,22 +290,22 @@ export class TikTokMetadataService {
     // Normalize URL to handle mobile/desktop/short links
     const normalizedUrl = await this.normalizeTikTokUrl(url);
     console.log('Fetching song from URL:', normalizedUrl);
-    
+
     // Check if it's a music page URL or video URL
     if (this.isMusicPageUrl(normalizedUrl)) {
       console.log('Music page detected, using Playwright scraper...');
-      
+
       try {
         // PRIMARY METHOD: Use Playwright for reliable scraping
         const playwrightData = await playwrightScraper.scrapeMusicPage(normalizedUrl);
-        
+
         console.log('✅ Playwright scraping successful:', {
           title: playwrightData.title,
           author: playwrightData.authorName,
           hasCover: !!playwrightData.coverUrl,
           videoCount: playwrightData.videoCount
         });
-        
+
         return {
           id: playwrightData.id,
           title: playwrightData.title,
@@ -317,12 +317,12 @@ export class TikTokMetadataService {
         };
       } catch (playwrightError: any) {
         console.warn('⚠️ Playwright scraping failed, trying fallback method:', playwrightError.message);
-        
+
         // FALLBACK: Try old scraping method
         return await this.fallbackScraping(normalizedUrl);
       }
     }
-    
+
     // For video URLs, use tiktok-scraper-ts
     return await this.scrapeFromVideo(normalizedUrl);
   }
@@ -332,7 +332,7 @@ export class TikTokMetadataService {
    */
   private async fallbackScraping(normalizedUrl: string): Promise<SongMetadata> {
     const TikTokScraper = await import('tiktok-scraper-ts');
-    
+
     if (this.isMusicPageUrl(normalizedUrl)) {
       // For music page URLs, extract song ID and create metadata
       // TikTok music URL format: /music/Song-Name-123456789
@@ -340,20 +340,20 @@ export class TikTokMetadataService {
       if (!musicIdMatch) {
         throw new Error('Could not extract song ID from music URL');
       }
-      
+
       const songId = musicIdMatch[1];
       const songNameSlug = normalizedUrl.match(/\/music\/([^\/\?]+)/)?.[1] || '';
       // Convert slug to title: "Some-Song-Name" -> "Some Song Name"
       const songTitle = songNameSlug.replace(/-\d+$/, '').split('-').join(' ');
-      
+
       console.log('Music page detected:', { songId, songTitle });
-      
+
       // Scrape additional metadata from the music page (cover art, etc.)
       console.log('Scraping music page for cover art...');
       const scrapedMetadata = await this.scrapeMusicPageMetadata(normalizedUrl);
-      
+
       console.log('Scraped metadata:', scrapedMetadata);
-      
+
       // For music pages, combine URL-extracted data with scraped metadata
       return {
         id: songId,
@@ -364,28 +364,30 @@ export class TikTokMetadataService {
         playUrl: undefined,
       };
     }
+
+    throw new Error('Invalid music URL for fallback scraping');
   }
 
   /**
    * Scrape song data from a video URL
    */
   private async scrapeFromVideo(normalizedUrl: string): Promise<SongMetadata> {
-    const TikTokScraper = await import('tiktok-scraper-ts');
+    const TikTokScraper = await import('tiktok-scraper-ts') as any;
     const getMusic = TikTokScraper.getMusic || TikTokScraper.default?.getMusic;
-    
+
     if (!getMusic) {
       throw new Error('getMusic function not found in tiktok-scraper-ts');
     }
-    
+
     try {
       const musicData = await getMusic(normalizedUrl);
-      
+
       console.log('Song data fetched from video:', {
         id: musicData?.id,
         title: musicData?.title,
         authorName: musicData?.authorName
       });
-      
+
       return {
         id: musicData.id,
         title: musicData.title,
@@ -413,18 +415,18 @@ export class TikTokMetadataService {
     // Normalize URL to handle mobile/desktop/short links
     const normalizedUrl = await this.normalizeTikTokUrl(url);
     console.log('Fetching video from URL:', normalizedUrl);
-    
+
     // Dynamic import - only loads when actually called (server-side only)
-    const TikTokScraper = await import('tiktok-scraper-ts');
+    const TikTokScraper = await import('tiktok-scraper-ts') as any;
     const getVideoMeta = TikTokScraper.getVideoMeta || TikTokScraper.default?.getVideoMeta;
-    
+
     if (!getVideoMeta) {
       throw new Error('getVideoMeta function not found in tiktok-scraper-ts');
     }
-    
+
     try {
       const videoData = await getVideoMeta(normalizedUrl);
-      
+
       return {
         id: videoData.id,
         description: videoData.description,

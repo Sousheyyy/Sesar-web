@@ -9,10 +9,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { 
-  Loader2, 
-  CheckCircle2, 
-  AlertCircle, 
+import {
+  Loader2,
+  CheckCircle2,
+  AlertCircle,
   ExternalLink,
   Users,
   Video,
@@ -28,12 +28,14 @@ interface TikTokUserProfile {
   uniqueId: string;
   nickname: string;
   avatar?: string;
+  avatarLarger?: string;
   signature?: string;
   followerCount?: number;
   followingCount?: number;
   videoCount?: number;
   heartCount?: number;
   isVerified?: boolean;
+  isPrivate?: boolean;
   isValid: boolean;
 }
 
@@ -62,12 +64,12 @@ export function TikTokUsernameForm({ currentTikTokHandle, email, createdAt }: Ti
   const loadProfile = async (handle: string) => {
     setIsLoadingProfile(true);
     setError(null);
-    
+
     try {
       const response = await fetch("/api/user/profile/tiktok-check", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           username: handle,
           autoUpdate: false
         }),
@@ -88,7 +90,7 @@ export function TikTokUsernameForm({ currentTikTokHandle, email, createdAt }: Ti
 
   const handleCheck = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (!username.trim()) {
       toast.error("Lütfen bir TikTok kullanıcı adı girin");
       return;
@@ -102,7 +104,7 @@ export function TikTokUsernameForm({ currentTikTokHandle, email, createdAt }: Ti
       const response = await fetch("/api/user/profile/tiktok-check", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           username: username.trim(),
           autoUpdate: true
         }),
@@ -219,8 +221,8 @@ export function TikTokUsernameForm({ currentTikTokHandle, email, createdAt }: Ti
           <div className="rounded-lg border bg-muted/30 p-6 space-y-6">
             <div className="flex items-start gap-4">
               <Avatar className="h-20 w-20">
-                <AvatarImage 
-                  src={profileData.avatarLarger || profileData.avatar} 
+                <AvatarImage
+                  src={profileData.avatarLarger || profileData.avatar}
                   alt={profileData.nickname}
                 />
                 <AvatarFallback>
