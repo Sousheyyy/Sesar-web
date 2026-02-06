@@ -32,8 +32,9 @@ async function createSupabaseUser(email: string, password: string, name: string)
   // Note: deleting from Supabase Auth might NOT cascade to Prisma if not configured, but our script clears Prisma first.
 
   // Find user by email first to get ID if exists
-  const { data: { users } } = await supabase.auth.admin.listUsers();
-  const existingUser = users.find(u => u.email === email);
+  const listUsersResponse = await supabase.auth.admin.listUsers();
+  const users = listUsersResponse.data?.users || [];
+  const existingUser = users.find((u: any) => u.email === email);
 
   if (existingUser) {
     console.log(`   ⚠️ User ${email} already exists in Supabase Auth. Deleting to recreate...`);
