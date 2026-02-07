@@ -55,71 +55,12 @@ export const appRouter = t.router({
         throw new Error("UNAUTHORIZED");
       }
 
-      const currentUser = await prisma.user.findUnique({
-        where: { id: userId },
-        select: {
-          tiktok_access_token: true,
-          tiktok_refresh_token: true,
-          tiktok_token_expires_at: true,
-          lastStatsFetchedAt: true
-        }
-      });
-
-      if (!currentUser?.tiktok_access_token) {
-        throw new Error("TIKTOK_NOT_CONNECTED: Please connect your TikTok account first via OAuth");
-      }
-
-      // Rate limiting: Check if updated recently (e.g. 10 mins)
-      if (currentUser?.lastStatsFetchedAt) {
-        const timeDiff = new Date().getTime() - new Date(currentUser.lastStatsFetchedAt).getTime();
-        const minutesDiff = timeDiff / (1000 * 60);
-
-        if (minutesDiff < 10) {
-          return prisma.user.findUnique({ where: { id: userId } });
-        }
-      }
-
-      // Refresh token if expired
-      let accessToken = currentUser.tiktok_access_token;
-      if (
-        currentUser.tiktok_token_expires_at &&
-        new Date() > currentUser.tiktok_token_expires_at
-      ) {
-        const { tiktokAPI } = await import("@/lib/tiktok-api");
-        const newTokens = await tiktokAPI.refreshAccessToken(
-          currentUser.tiktok_refresh_token!
-        );
-
-        accessToken = newTokens.access_token;
-        await prisma.user.update({
-          where: { id: userId },
-          data: {
-            tiktok_access_token: newTokens.access_token,
-            tiktok_refresh_token: newTokens.refresh_token,
-            tiktok_token_expires_at: new Date(
-              Date.now() + newTokens.expires_in * 1000
-            )
-          }
-        });
-      }
-
-      // Fetch fresh user data from TikTok API
-      const { tiktokAPI } = await import("@/lib/tiktok-api");
-      const userInfo = await tiktokAPI.getUserInfo(accessToken);
-
-      // Update user stats
+      // Simple profile update without TikTok API
+      // TikTok OAuth integration has been removed - now using Apify for data fetching
       const updatedUser = await prisma.user.update({
         where: { id: userId },
         data: {
-          tiktokHandle: userInfo.username.replace('@', ''),
-          name: userInfo.display_name,
-          avatar: userInfo.avatar_url,
-          followerCount: userInfo.follower_count,
-          followingCount: userInfo.following_count,
-          totalLikes: userInfo.likes_count,
-          videoCount: userInfo.video_count,
-          creatorTier: getCreatorTierFromFollowers(userInfo.follower_count),
-          lastStatsFetchedAt: new Date()
+          ...(input.tiktokHandle && { tiktokHandle: input.tiktokHandle.replace('@', '') }),
         }
       });
 
