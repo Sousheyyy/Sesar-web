@@ -49,6 +49,7 @@
         "@types/node": "^20.19.27",
         "@types/react": "^18.3.27",
         "@types/react-dom": "^18.2.25",
+        "apify-client": "^2.22.0",
         "autoprefixer": "^10.4.23",
         "aws4": "^1.13.2",
         "bcryptjs": "^2.4.3",

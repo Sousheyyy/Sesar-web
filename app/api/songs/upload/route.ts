@@ -1,245 +1,191 @@
 /**
- * Song Upload with InsightIQ Integration
+ * Song Upload with Apify Integration
  * POST /api/songs/upload
- * 
- * Artist uploads song by providing a TikTok VIDEO URL that uses their song.
- * InsightIQ API fetches the video content and extracts music metadata
- * (song name, artist name, cover art).
- * 
- * Note: Music page URLs (tiktok.com/music/...) are NOT supported because
- * InsightIQ/Phyllo doesn't have a direct music metadata API endpoint.
- * Video URLs work because we can extract audio_track_info from the video content.
+ *
+ * Supports TikTok MUSIC URLs and VIDEO URLs.
+ * Uses Apify to fetch music metadata (song name, artist name, cover art).
+ * Database-level caching prevents duplicate API calls.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
-import { insightIQClient } from '@/lib/insightiq/client';
-import {
-  isTikTokMusicUrl,
-  isTikTokVideoUrl,
-  normalizeTikTokUrl,
-} from '@/lib/insightiq/url-utils';
-import { AudioTrackInfo } from '@/lib/insightiq/types';
+import { apifyClient, ApifyError } from '@/lib/apify/client';
+import { TikTokUrlParser, ValidationError } from '@/lib/apify/url-utils';
+import { rateLimit } from '@/lib/rate-limit';
 
 // Force dynamic rendering
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: NextRequest) {
+  const startTime = Date.now();
+
   try {
+    // 1. Authentication check
     const session = await auth();
 
     if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    // Check if InsightIQ is configured
-    if (!insightIQClient.isInsightIQConfigured()) {
-      return NextResponse.json(
-        {
-          error: 'Service not configured',
-          message: 'InsightIQ API is not configured. Please contact support.',
-        },
-        { status: 503 }
-      );
-    }
-
+    // 2. Parse request body
     const { tiktokUrl } = await req.json();
 
     if (!tiktokUrl) {
       return NextResponse.json(
-        { error: 'TikTok URL is required' },
+        { error: 'TikTok linki gereklidir' },
         { status: 400 }
       );
     }
 
-    // Normalize URL (handle mobile variants)
-    const normalizedUrl = normalizeTikTokUrl(tiktokUrl);
+    // 3. Rate limiting (10 requests per hour per user)
+    const identifier = session.user.id;
+    const rateLimitResult = await rateLimit(identifier);
 
-    // Determine URL type
-    const isVideoUrl = isTikTokVideoUrl(normalizedUrl);
-    const isMusicUrl = isTikTokMusicUrl(normalizedUrl);
-
-    if (!isVideoUrl && !isMusicUrl) {
+    if (!rateLimitResult.success) {
       return NextResponse.json(
         {
-          error: 'Invalid TikTok URL',
-          message: 'Please provide a valid TikTok video URL (e.g., tiktok.com/@user/video/123)',
+          error: 'Çok fazla istek gönderildi. Lütfen 1 saat sonra tekrar deneyin.',
+          retryAfter: rateLimitResult.reset
         },
-        { status: 400 }
+        { status: 429 }
       );
     }
 
-    // Recommend video URLs for best results
-    if (isMusicUrl) {
-      return NextResponse.json(
-        {
-          error: 'Music URL not supported',
-          message: 'Lütfen şarkınızı kullanan bir TikTok video linki yapıştırın. Video linkinden şarkı bilgileri otomatik olarak çekilecektir. Örn: tiktok.com/@user/video/123',
-          hint: 'video_url_required',
-        },
-        { status: 400 }
-      );
-    }
-
-    let musicId: string | null = null;
-    let musicData: AudioTrackInfo | null = null;
-    let thumbnailUrl: string | null = null;
-    let videoCount = 0;
-
-    // Video URL - fetch video content via InsightIQ API
-    console.log('[Song Upload] Processing video URL via InsightIQ...');
-
+    // 4. Validate and normalize URL (handles redirects)
+    let normalizedUrl: string;
     try {
-      const videoContent = await insightIQClient.fetchContentByUrl(normalizedUrl);
-
-      console.log('[Song Upload] Video content fetched:', JSON.stringify(videoContent, null, 2));
-
-      if (!videoContent.audio_track_info) {
+      normalizedUrl = await TikTokUrlParser.validateAndNormalize(tiktokUrl);
+    } catch (error) {
+      if (error instanceof ValidationError) {
         return NextResponse.json(
-          {
-            error: 'No music found',
-            message: 'Bu videoda tanımlanabilir bir müzik parçası bulunamadı. Lütfen şarkı içeren başka bir video deneyin.',
-          },
+          { error: error.message },
           { status: 400 }
         );
       }
+      throw error;
+    }
 
-      musicData = videoContent.audio_track_info;
-      musicId = musicData.id;
-      // Use thumbnail_url from video as cover since audio_track_info may not have cover_url
-      thumbnailUrl = musicData.cover_url || videoContent.thumbnail_url;
-      videoCount = videoContent.engagement?.plays ? 1 : 1;
+    // 5. Try to extract music ID for DB lookup
+    const musicId = TikTokUrlParser.extractMusicId(normalizedUrl);
 
-      console.log(`[Song Upload] Music extracted from video:`, {
-        title: musicData.title,
-        artist: musicData.artist,
-        musicId: musicId,
-        thumbnailUrl: thumbnailUrl,
+    // 6. Database-level caching: Check if we already have this song
+    if (musicId) {
+      const existingSong = await prisma.song.findUnique({
+        where: { tiktokMusicId: musicId }
       });
-    } catch (fetchError: any) {
-      console.error('[Song Upload] Error fetching video content:', fetchError);
-      return NextResponse.json(
-        {
-          error: 'Could not fetch video',
-          message: 'Video bilgileri alınamadı. Lütfen URL\'yi kontrol edip tekrar deneyin.',
-          details: fetchError.message,
-        },
-        { status: 400 }
-      );
-    }
 
-    if (!musicId || !musicData) {
-      return NextResponse.json(
-        {
-          error: 'Could not extract music information',
-          message: 'Unable to get music metadata from the provided URL.',
-        },
-        { status: 400 }
-      );
-    }
+      if (existingSong) {
+        console.log('✅ Song found in DB (cache hit)', { musicId, duration: Date.now() - startTime });
 
-    // Check if song already exists
-    const existingSong = await prisma.song.findUnique({
-      where: { tiktokMusicId: musicId },
-    });
+        // Return existing song if it belongs to this user
+        if (existingSong.artistId === session.user.id) {
+          return NextResponse.json({
+            success: true,
+            song: existingSong,
+            cached: true,
+            message: 'Müzik zaten kütüphanenizde mevcut',
+            existing: true
+          });
+        }
 
-    if (existingSong) {
-      // Return existing song if it belongs to this user
-      if (existingSong.artistId === session.user.id) {
-        return NextResponse.json({
-          success: true,
-          song: existingSong,
-          videoCount: existingSong.videoCount || 0,
-          message: 'Song already exists in your library',
-          existing: true,
-        });
-      }
-
-      return NextResponse.json(
-        {
-          error: 'Song already exists',
-          message: 'This song has already been added by another artist',
-          song: {
-            id: existingSong.id,
-            title: existingSong.title,
-            authorName: existingSong.authorName,
+        // Song exists but belongs to another user
+        return NextResponse.json(
+          {
+            error: 'Bu müzik başka bir sanatçı tarafından eklenmiş',
+            message: 'Bu müzik zaten sistemde mevcut',
+            song: {
+              id: existingSong.id,
+              title: existingSong.title,
+              authorName: existingSong.authorName,
+            },
           },
-        },
-        { status: 409 }
-      );
+          { status: 409 }
+        );
+      }
     }
 
-    console.log(`[Song Upload] Creating song: ${musicData.title} by ${musicData.artist}`);
+    // 7. Fetch from Apify (first time or no music ID extracted)
+    console.log('📡 Fetching from Apify...', { url: normalizedUrl });
 
-    // Create song in database
-    const song = await prisma.song.create({
-      data: {
-        title: musicData.title,
-        authorName: musicData.artist,
-        coverImage: musicData.cover_url || thumbnailUrl || null,
+    let metadata: { title: string; authorName: string; coverImage: string; tiktokMusicId: string };
+    try {
+      metadata = await apifyClient.fetchMusicMetadata(normalizedUrl);
+    } catch (error) {
+      if (error instanceof ApifyError) {
+        return NextResponse.json(
+          { error: error.message },
+          { status: 503 } // Service unavailable
+        );
+      }
+      throw error;
+    }
+
+    // 8. Save to database (upsert to handle race conditions)
+    const song = await prisma.song.upsert({
+      where: { tiktokMusicId: metadata.tiktokMusicId },
+      update: {
+        // Update URL and timestamp in case of race condition
         tiktokUrl: normalizedUrl,
-        tiktokMusicId: musicId,
-        musicCoverUrl: musicData.cover_url || null,
-        musicUrl: musicData.url || normalizedUrl,
-        duration: musicData.duration || null,
-        videoCount: videoCount || null,
+        updatedAt: new Date(),
+        statsLastFetched: new Date()
+      },
+      create: {
+        title: metadata.title,
+        authorName: metadata.authorName,
+        coverImage: metadata.coverImage,
+        tiktokUrl: normalizedUrl,
+        tiktokMusicId: metadata.tiktokMusicId,
+        musicCoverUrl: metadata.coverImage,
+        musicUrl: normalizedUrl,
         statsLastFetched: new Date(),
         artist: {
-          connect: { id: session.user.id },
-        },
-      },
+          connect: { id: session.user.id }
+        }
+      }
     });
 
-    console.log(`[Song Upload] Song created successfully: ${song.id}`);
+    console.log('✅ Song saved to DB', {
+      songId: song.id,
+      musicId: song.tiktokMusicId,
+      duration: Date.now() - startTime
+    });
 
     return NextResponse.json({
       success: true,
       song,
-      videoCount,
-      message: `Song "${musicData.title}" by ${musicData.artist} added successfully`,
+      cached: false,
+      message: `"${metadata.title}" başarıyla eklendi`
     });
-  } catch (error) {
-    console.error('[Song Upload] Error:', error);
 
-    if (error instanceof Error) {
-      // Handle specific errors
-      if (error.message.includes('not connected')) {
-        return NextResponse.json(
-          {
-            error: 'TikTok not connected',
-            message: 'Please connect your TikTok account first',
-            requiresConnection: true,
-          },
-          { status: 403 }
-        );
-      }
+  } catch (error: any) {
+    // Log error for monitoring
+    console.error('❌ Song upload failed:', {
+      error: error.message,
+      type: error.name,
+      duration: Date.now() - startTime
+    });
 
-      if (error.message.includes('InsightIQ API Error')) {
-        return NextResponse.json(
-          {
-            error: 'API Error',
-            message: error.message,
-          },
-          { status: 502 }
-        );
-      }
-
-      if (error.message.includes('not configured')) {
-        return NextResponse.json(
-          {
-            error: 'Service not configured',
-            message: 'The TikTok integration service is not properly configured.',
-          },
-          { status: 503 }
-        );
-      }
+    // Handle specific error types
+    if (error instanceof ValidationError) {
+      return NextResponse.json(
+        { error: error.message },
+        { status: 400 }
+      );
     }
 
+    if (error instanceof ApifyError) {
+      return NextResponse.json(
+        { error: error.message },
+        { status: 503 } // Service unavailable
+      );
+    }
+
+    // Generic error
     return NextResponse.json(
       {
-        error: 'Failed to upload song',
-        message: error instanceof Error ? error.message : 'Unknown error',
+        error: 'Bir hata oluştu. Lütfen tekrar deneyin.',
+        details: process.env.NODE_ENV === 'development' ? error.message : undefined
       },
       { status: 500 }
     );
