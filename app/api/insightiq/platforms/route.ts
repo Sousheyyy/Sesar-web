@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 
+export const dynamic = 'force-dynamic';
+
+
 /**
  * Debug endpoint to list all available work platforms from InsightIQ
  * This helps identify the correct platform IDs
@@ -15,9 +18,15 @@ export async function GET(request: NextRequest) {
 
   try {
     const authHeader = `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
+
     const res = await fetch(`${baseUrl}/v1/work-platforms`, {
       headers: { Authorization: authHeader },
+      signal: controller.signal,
     });
+
+    clearTimeout(timeoutId);
 
     if (!res.ok) {
       const errorText = await res.text();

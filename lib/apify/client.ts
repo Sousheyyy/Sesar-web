@@ -33,9 +33,11 @@ export class ApifyClient {
       }
 
       // 2. Run the actor and wait for it to finish (call() does both automatically)
-      const run = await this.client.actor(this.actorId).call({
-        music_id: musicId  // Send just the ID, not the full URL
-      });
+      const run = await this.client.actor(this.actorId).call(
+        { music_id: musicId },
+        { waitSecs: Math.floor(this.timeout / 1000) }
+      );
+
 
       // 2. Check if run succeeded
       if (run.status !== 'SUCCEEDED') {
