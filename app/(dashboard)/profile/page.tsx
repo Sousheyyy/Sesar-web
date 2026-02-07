@@ -1,6 +1,6 @@
 import { requireAuth } from "@/lib/auth-utils";
 import { prisma } from "@/lib/prisma";
-import { TikTokConnect } from "@/components/profile/tiktok-connect";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
 // Force dynamic rendering for Cloudflare Pages
 export const dynamic = 'force-dynamic';
@@ -8,13 +8,17 @@ export const dynamic = 'force-dynamic';
 export default async function ProfilePage() {
   const user = await requireAuth();
 
-  // Fetch TikTok handle, email, and creation date
+  // Fetch user data
   const userData = await prisma.user.findUnique({
     where: { id: user.id },
     select: {
-      tiktokHandle: true,
+      name: true,
       email: true,
+      tiktokHandle: true,
       createdAt: true,
+      role: true,
+      balance: true,
+      followerCount: true,
     },
   });
 
@@ -36,7 +40,46 @@ export default async function ProfilePage() {
         <p className="text-muted-foreground">Hesap ayarlarınızı yönetin</p>
       </div>
 
-      <TikTokConnect />
+      <Card>
+        <CardHeader>
+          <CardTitle>Profil Bilgileri</CardTitle>
+          <CardDescription>Hesap detaylarınız</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-4">
+            {userData.name && (
+              <div>
+                <p className="text-sm font-medium text-muted-foreground">Ad</p>
+                <p className="text-base">{userData.name}</p>
+              </div>
+            )}
+            <div>
+              <p className="text-sm font-medium text-muted-foreground">E-posta</p>
+              <p className="text-base">{userData.email}</p>
+            </div>
+            {userData.tiktokHandle && (
+              <div>
+                <p className="text-sm font-medium text-muted-foreground">TikTok Kullanıcı Adı</p>
+                <p className="text-base">@{userData.tiktokHandle}</p>
+              </div>
+            )}
+            <div>
+              <p className="text-sm font-medium text-muted-foreground">Rol</p>
+              <p className="text-base">{userData.role}</p>
+            </div>
+            <div>
+              <p className="text-sm font-medium text-muted-foreground">Bakiye</p>
+              <p className="text-base">${userData.balance.toString()}</p>
+            </div>
+            {userData.followerCount !== null && (
+              <div>
+                <p className="text-sm font-medium text-muted-foreground">Takipçi Sayısı</p>
+                <p className="text-base">{userData.followerCount.toLocaleString()}</p>
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }
