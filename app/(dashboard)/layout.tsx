@@ -1,7 +1,7 @@
 import { requireAuth } from "@/lib/auth-utils";
 import { Sidebar } from "@/components/dashboard/sidebar";
 import { UserNav } from "@/components/dashboard/user-nav";
-import { Bell, Sparkles } from "lucide-react";
+import { Bell } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 // Force dynamic rendering for Cloudflare Pages
@@ -33,12 +33,6 @@ export default async function DashboardLayout({
               <span className="text-zinc-500 font-normal mr-2">Merhaba,</span>
               {user.name || "Kullanıcı"}
             </h1>
-            {user.role === 'CREATOR' && (
-              <div className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-gradient-to-r from-purple-500/10 to-pink-500/10 border border-purple-500/10 text-xs font-medium text-purple-300">
-                <Sparkles className="w-3 h-3" />
-                <span>Pro Üretici</span>
-              </div>
-            )}
           </div>
           <div className="flex items-center gap-6">
             <Button variant="ghost" size="icon" className="relative text-zinc-400 hover:text-white hover:bg-white/5 rounded-full w-10 h-10 transition-colors">

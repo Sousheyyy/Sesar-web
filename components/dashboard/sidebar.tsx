@@ -6,18 +6,13 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import {
-  LayoutDashboard,
   Music2,
   TrendingUp,
-  Wallet,
   Settings,
   Users,
   FileText,
   BarChart3,
-  Upload,
-  CheckCircle2,
   User,
-  LogOut,
   Sparkles
 } from "lucide-react";
 import { UserRole } from "@prisma/client";
@@ -37,7 +32,6 @@ const navigation = {
   [UserRole.ARTIST]: [
     { name: "Şarkılarım", href: "/artist/songs", icon: Music2 },
     { name: "Kampanyalarım", href: "/artist/campaigns", icon: TrendingUp },
-    { name: "Cüzdan", href: "/wallet", icon: Wallet },
     { name: "Profil", href: "/profile", icon: User },
   ],
 };
@@ -45,11 +39,12 @@ const navigation = {
 export function Sidebar({ role }: SidebarProps) {
   const pathname = usePathname();
   const links = navigation[role] || navigation[UserRole.ARTIST];
+  const homeLink = role === UserRole.ADMIN ? "/admin/analytics" : "/artist/songs";
 
   return (
     <div className="flex h-full flex-col border-r border-white/5 bg-[#0A0A0B]/40 backdrop-blur-xl">
       <div className="p-8 pb-6">
-        <Link href="/dashboard" className="flex items-center gap-3 group">
+        <Link href={homeLink} className="flex items-center gap-3 group">
           <div className="relative">
             <div className="absolute -inset-1 rounded-full bg-gradient-to-r from-purple-600 to-pink-600 opacity-0 group-hover:opacity-50 blur transition-opacity" />
             <div className="relative h-10 w-10 rounded-xl bg-gradient-to-br from-purple-500/10 to-pink-500/10 flex items-center justify-center border border-white/10 group-hover:border-white/20 transition-colors">
