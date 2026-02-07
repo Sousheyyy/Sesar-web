@@ -45,7 +45,7 @@ export async function GET(req: NextRequest) {
 
         console.log(`[Cron] Found ${songsToRefresh.length} songs to refresh`);
 
-        const results = [];
+        const results: Array<{ id: string; title: string; status: string; error?: string }> = [];
 
         // 3. Refresh each song using Apify
         for (const song of songsToRefresh) {
