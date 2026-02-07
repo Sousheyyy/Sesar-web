@@ -67,10 +67,21 @@ export class ApifyClient {
       }
 
       // 6. Return normalized data
+      const coverImageUrl = music.cover_medium?.url_list?.[0] || music.cover_large?.url_list?.[0] || music.cover_thumb?.url_list?.[0] || '';
+
+      console.log('✅ Apify metadata extracted:', {
+        title: music.title,
+        author: music.author,
+        coverImageUrl,
+        musicId: music.id_str,
+        coverMediumExists: !!music.cover_medium,
+        urlListLength: music.cover_medium?.url_list?.length || 0
+      });
+
       return {
         title: music.title.trim(),
         authorName: music.author.trim(),
-        coverImage: music.cover_medium?.url_list?.[0] || music.cover_large?.url_list?.[0] || music.cover_thumb?.url_list?.[0] || '',
+        coverImage: coverImageUrl,
         tiktokMusicId: music.id_str
       };
 
