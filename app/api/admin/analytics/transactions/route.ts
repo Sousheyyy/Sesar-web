@@ -15,7 +15,7 @@ export async function GET(req: NextRequest) {
     }
 
     const { searchParams } = new URL(req.url);
-    const type = searchParams.get("type"); // "revenue" | "payouts" | "platformFee" | "safetyReserve" | "totalBank"
+    const type = searchParams.get("type"); // "revenue" | "payouts" | "platformFee" | "totalBank"
 
     if (!type) {
       return NextResponse.json({ error: "Type parameter required" }, { status: 400 });
@@ -43,16 +43,16 @@ export async function GET(req: NextRequest) {
       transactions = campaigns
         .map((campaign) => {
           const budget = Number(campaign.totalBudget) || 0;
-          const platformFeePercent = campaign.platformFeePercent || 0;
-          const feeAmount = (budget * platformFeePercent) / 100;
+          const commissionPercent = campaign.commissionPercent || 20;
+          const feeAmount = (budget * commissionPercent) / 100;
 
           if (feeAmount > 0) {
             return {
-              id: `campaign-${campaign.id}-platform-fee`,
+              id: `campaign-${campaign.id}-commission`,
               type: "DEPOSIT" as TransactionType,
               amount: feeAmount,
               status: "COMPLETED" as TransactionStatus,
-              description: `Platform ücreti: ${campaign.title}`,
+              description: `Komisyon (%${commissionPercent}): ${campaign.title}`,
               createdAt: campaign.createdAt,
               user: campaign.artist,
             };
@@ -79,9 +79,8 @@ export async function GET(req: NextRequest) {
         orderBy: { createdAt: "desc" },
         take: 1000,
       });
-    } else if (type === "platformFee" || type === "safetyReserve") {
-      // For platform fees and safety reserves, we need to calculate from campaigns
-      // Get approved campaigns and create virtual transactions
+    } else if (type === "platformFee") {
+      // Commission breakdown from approved campaigns
       const campaigns = await prisma.campaign.findMany({
         where: {
           status: { in: ["ACTIVE", "COMPLETED"] },
@@ -100,28 +99,16 @@ export async function GET(req: NextRequest) {
       transactions = campaigns
         .map((campaign) => {
           const budget = Number(campaign.totalBudget) || 0;
-          const platformFeePercent = campaign.platformFeePercent || 0;
-          const safetyReservePercent = campaign.safetyReservePercent || 0;
+          const commissionPercent = campaign.commissionPercent || 20;
+          const feeAmount = (budget * commissionPercent) / 100;
 
-          if (type === "platformFee" && platformFeePercent > 0) {
-            const feeAmount = (budget * platformFeePercent) / 100;
+          if (feeAmount > 0) {
             return {
-              id: `campaign-${campaign.id}-platform-fee`,
+              id: `campaign-${campaign.id}-commission`,
               type: "DEPOSIT" as TransactionType,
               amount: feeAmount,
               status: "COMPLETED" as TransactionStatus,
-              description: `Platform ücreti: ${campaign.title}`,
-              createdAt: campaign.createdAt,
-              user: campaign.artist,
-            };
-          } else if (type === "safetyReserve" && safetyReservePercent > 0) {
-            const reserveAmount = (budget * safetyReservePercent) / 100;
-            return {
-              id: `campaign-${campaign.id}-safety-reserve`,
-              type: "DEPOSIT" as TransactionType,
-              amount: reserveAmount,
-              status: "COMPLETED" as TransactionStatus,
-              description: `Güvenlik rezervi: ${campaign.title}`,
+              description: `Komisyon (%${commissionPercent}): ${campaign.title}`,
               createdAt: campaign.createdAt,
               user: campaign.artist,
             };

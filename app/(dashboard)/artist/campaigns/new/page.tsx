@@ -1,23 +1,63 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { SongUpload } from "@/components/upload/song-upload";
-import { Users, PlayCircle, BarChart, Music2, Calendar as CalendarIcon, Plus, CheckCircle2, Info, Sparkles, ChevronLeft, ChevronRight } from "lucide-react";
+import { Music2, CheckCircle2, Sparkles, ChevronLeft, ChevronRight, Clock, TrendingUp, Users, Eye, Heart, Share2 } from "lucide-react";
 import { TLIcon } from "@/components/icons/tl-icon";
-import { DatePicker } from "@/components/ui/new-date-picker";
 import { cn, formatCurrency } from "@/lib/utils";
 
 // Force dynamic rendering for Cloudflare Pages
 export const dynamic = 'force-dynamic';
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+
+// Tier configuration (mirrors server-side tierUtils)
+const TIER_CONFIG = {
+  S: { min: 100000, max: 1000000, duration: 30, commission: 10, label: 'S Tier', color: '#f59e0b' },
+  A: { min: 70000, max: 99999, duration: 21, commission: 12, label: 'A Tier', color: '#8b5cf6' },
+  B: { min: 40000, max: 69999, duration: 14, commission: 15, label: 'B Tier', color: '#3b82f6' },
+  C: { min: 20000, max: 39999, duration: 7, commission: 20, label: 'C Tier', color: '#22c55e' },
+} as const;
+
+type TierKey = keyof typeof TIER_CONFIG;
+
+function getTierFromBudget(budget: number): TierKey | null {
+  if (budget >= 100000) return 'S';
+  if (budget >= 70000) return 'A';
+  if (budget >= 40000) return 'B';
+  if (budget >= 20000) return 'C';
+  return null;
+}
+
+function getEstimatedReach(tier: TierKey, budget: number) {
+  const multipliers: Record<TierKey, { minMul: number; maxMul: number; likeMin: number; likeMax: number; shareMin: number; shareMax: number }> = {
+    C: { minMul: 8, maxMul: 15, likeMin: 0.04, likeMax: 0.06, shareMin: 0.008, shareMax: 0.012 },
+    B: { minMul: 12, maxMul: 22, likeMin: 0.05, likeMax: 0.07, shareMin: 0.01, shareMax: 0.015 },
+    A: { minMul: 15, maxMul: 28, likeMin: 0.05, likeMax: 0.08, shareMin: 0.012, shareMax: 0.018 },
+    S: { minMul: 20, maxMul: 35, likeMin: 0.06, likeMax: 0.09, shareMin: 0.015, shareMax: 0.022 },
+  };
+  const m = multipliers[tier];
+  const minViews = budget * m.minMul;
+  const maxViews = budget * m.maxMul;
+  return {
+    minViews, maxViews,
+    minLikes: Math.round(minViews * m.likeMin), maxLikes: Math.round(maxViews * m.likeMax),
+    minShares: Math.round(minViews * m.shareMin), maxShares: Math.round(maxViews * m.shareMax),
+  };
+}
+
+function formatNum(n: number): string {
+  if (n >= 1000000) return `${(n / 1000000).toFixed(1)}M`;
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
+  return n.toString();
+}
 
 interface Song {
   id: string;
@@ -33,9 +73,6 @@ export default function NewCampaignPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [isSongDialogOpen, setIsSongDialogOpen] = useState(false);
 
-  const [startDate, setStartDate] = useState<Date | undefined>();
-  const [endDate, setEndDate] = useState<Date | undefined>();
-
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
   const ITEMS_PER_PAGE = 6;
@@ -46,26 +83,17 @@ export default function NewCampaignPage() {
     title: "",
     description: "",
     totalBudget: "",
-    minFollowers: "",
     minVideoDuration: "15",
-    startDate: "",
-    endDate: "",
-    targetTiers: [] as string[],
-    isProOnly: false,
   });
-
-  const availableTiers = ["C", "B", "A", "S"];
 
   useEffect(() => {
     // Fetch songs
     fetch("/api/songs")
       .then((res) => res.json())
       .then((data) => {
-        // Handle paginated response structure
         if (data.data && Array.isArray(data.data)) {
           setSongs(data.data);
         } else if (Array.isArray(data)) {
-          // Fallback: if API returns array directly
           setSongs(data);
         } else {
           console.error("Unexpected songs response format:", data);
@@ -94,32 +122,17 @@ export default function NewCampaignPage() {
     toast.success("Şarkı başarıyla eklendi!");
   };
 
-  const handleTierToggle = (tier: string) => {
-    setFormData(prev => {
-      const currentTiers = prev.targetTiers;
-      if (currentTiers.includes(tier)) {
-        return { ...prev, targetTiers: currentTiers.filter(t => t !== tier) };
-      } else {
-        return { ...prev, targetTiers: [...currentTiers, tier] };
-      }
-    });
-  };
+  // Tier calculations
+  const budget = parseFloat(formData.totalBudget) || 0;
+  const tier = useMemo(() => getTierFromBudget(budget), [budget]);
+  const tierConfig = tier ? TIER_CONFIG[tier] : null;
+  const estimates = useMemo(() => tier ? getEstimatedReach(tier, budget) : null, [tier, budget]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (!formData.songId) {
       toast.error("Lütfen bir şarkı seçin");
-      return;
-    }
-
-    if (!formData.startDate) {
-      toast.error("Lütfen kampanya başlangıç tarihi seçin");
-      return;
-    }
-
-    if (!formData.endDate) {
-      toast.error("Lütfen kampanya bitiş tarihi seçin");
       return;
     }
 
@@ -135,19 +148,8 @@ export default function NewCampaignPage() {
       return;
     }
 
-    // Validate dates
-    const campaignStartDate = new Date(formData.startDate);
-    const campaignEndDate = new Date(formData.endDate);
-    const now = new Date();
-    now.setHours(0, 0, 0, 0); // Reset to start of today for comparison
-
-    if (campaignStartDate < now) {
-      toast.error("Başlangıç tarihi bugün veya gelecekte olmalıdır");
-      return;
-    }
-
-    if (campaignEndDate <= campaignStartDate) {
-      toast.error("Bitiş tarihi başlangıç tarihinden sonra olmalıdır");
+    if (totalBudget > 1000000) {
+      toast.error("Maksimum kampanya bütçesi ₺1,000,000");
       return;
     }
 
@@ -162,12 +164,7 @@ export default function NewCampaignPage() {
           title: formData.title,
           description: formData.description || null,
           totalBudget,
-          minFollowers: formData.minFollowers ? parseInt(formData.minFollowers) : null,
           minVideoDuration: formData.minVideoDuration ? parseInt(formData.minVideoDuration) : null,
-          startDate: new Date(formData.startDate).toISOString(),
-          endDate: new Date(formData.endDate).toISOString(),
-          targetTiers: formData.targetTiers,
-          isProOnly: formData.isProOnly,
         }),
       });
 
@@ -349,149 +346,25 @@ export default function NewCampaignPage() {
                     onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                   />
                 </div>
+                <div className="space-y-2">
+                  <Label htmlFor="minVideoDuration">Min. Video Süresi (sn)</Label>
+                  <Input
+                    id="minVideoDuration"
+                    type="number"
+                    min="5"
+                    max="180"
+                    placeholder="15"
+                    value={formData.minVideoDuration}
+                    onChange={(e) => setFormData({ ...formData, minVideoDuration: e.target.value })}
+                  />
+                </div>
               </CardContent>
             </Card>
           </div>
 
-          <Separator />
-
-          {/* Step 3: Targeting & Schedule */}
-          <div className="space-y-4">
-            <h3 className="text-xl font-semibold flex items-center gap-2">
-              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-primary text-sm">3</span>
-              Hedefleme & Zamanlama
-            </h3>
-
-            <div className="grid gap-6 md:grid-cols-2">
-              <Card>
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-base flex items-center gap-2">
-                    <Users className="h-4 w-4 text-primary" />
-                    Hedef Kitle
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-6">
-                  <div className="flex items-center space-x-2 border p-3 rounded-lg bg-secondary/20">
-                    <input
-                      type="checkbox"
-                      id="isProOnly"
-                      className="h-5 w-5 rounded border-gray-300 text-primary focus:ring-primary"
-                      checked={formData.isProOnly}
-                      onChange={(e) => setFormData({ ...formData, isProOnly: e.target.checked })}
-                    />
-                    <Label htmlFor="isProOnly" className="font-medium cursor-pointer">
-                      Sadece PRO Üyeler Katılabilsin
-                      <span className="block text-xs text-muted-foreground font-normal">
-                        Daha deneyimli içerik üreticilerine ulaşın
-                      </span>
-                    </Label>
-                  </div>
-
-                  <div className="space-y-3">
-                    <Label className="block">Hedef İçerik Üretici Seviyeleri</Label>
-                    <div className="flex gap-2 flex-wrap">
-                      {availableTiers.map((tier) => (
-                        <div
-                          key={tier}
-                          onClick={() => handleTierToggle(tier)}
-                          className={cn(
-                            "cursor-pointer px-3 py-1.5 rounded-md border text-sm font-medium transition-colors flex items-center justify-center min-w-[36px]",
-                            formData.targetTiers.includes(tier)
-                              ? "bg-primary text-primary-foreground border-primary"
-                              : "bg-background hover:bg-muted border-input"
-                          )}
-                        >
-                          {tier}
-                        </div>
-                      ))}
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      {formData.targetTiers.length === 0
-                        ? "Seçim yapılmazsa TÜM seviyeler katılabilir."
-                        : "Sadece seçilen seviyelerdeki üreticiler katılabilir."}
-                    </p>
-                  </div>
-
-                  <Separator />
-
-                  <div className="space-y-2">
-                    <Label htmlFor="minFollowers">Minimum Takipçi</Label>
-                    <Input
-                      id="minFollowers"
-                      type="number"
-                      min="0"
-                      placeholder="1000"
-                      value={formData.minFollowers}
-                      onChange={(e) => setFormData({ ...formData, minFollowers: e.target.value })}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="minVideoDuration">Min. Video Süresi (sn)</Label>
-                    <Input
-                      id="minVideoDuration"
-                      type="number"
-                      min="5"
-                      max="180"
-                      placeholder="15"
-                      value={formData.minVideoDuration}
-                      onChange={(e) => setFormData({ ...formData, minVideoDuration: e.target.value })}
-                    />
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-base flex items-center gap-2">
-                    <CalendarIcon className="h-4 w-4 text-primary" />
-                    Zamanlama
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="space-y-2">
-                    <Label>Başlangıç Tarihi</Label>
-                    <DatePicker
-                      date={startDate}
-                      setDate={(date) => {
-                        setStartDate(date);
-                        setFormData(prev => ({
-                          ...prev,
-                          startDate: date ? date.toISOString() : ""
-                        }));
-                      }}
-                      disabled={(date) => date < new Date(new Date().setHours(0, 0, 0, 0))}
-                      placeholder="Seçiniz"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Bitiş Tarihi</Label>
-                    <DatePicker
-                      date={endDate}
-                      setDate={(date) => {
-                        setEndDate(date);
-                        setFormData(prev => ({
-                          ...prev,
-                          endDate: date ? date.toISOString() : ""
-                        }));
-                      }}
-                      disabled={(date) => {
-                        const today = new Date();
-                        today.setHours(0, 0, 0, 0);
-                        if (date < today) return true;
-                        if (startDate && date <= startDate) return true;
-                        return false;
-                      }}
-                      placeholder="Seçiniz"
-                    />
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
-          </div>
-
         </div>
 
-        {/* Right Column - Sticky Sidebar */}
+        {/* Right Column - Sticky Sidebar with Budget & Tier Calculator */}
         <div className="space-y-6">
           <Card className="border-primary/20 shadow-lg sticky top-6">
             <CardContent className="space-y-6 pt-6">
@@ -503,6 +376,7 @@ export default function NewCampaignPage() {
                   <Input
                     type="number"
                     min="20000"
+                    max="1000000"
                     placeholder="20000"
                     className="pl-12 h-14 text-2xl font-bold"
                     value={formData.totalBudget}
@@ -510,20 +384,84 @@ export default function NewCampaignPage() {
                   />
                 </div>
                 <div className="flex items-center justify-between text-xs text-muted-foreground px-1">
-                  <span>Min: ₺20,000.00</span>
-                  <span className="text-primary">Platform ücreti dahildir</span>
+                  <span>Min: ₺20,000</span>
+                  <span>Max: ₺1,000,000</span>
                 </div>
 
-                {/* Automatic Participant Limit Info */}
-                {formData.totalBudget && !isNaN(parseFloat(formData.totalBudget)) && parseFloat(formData.totalBudget) >= 20000 && (
-                  <div className="bg-primary/10 p-3 rounded-lg border border-primary/20 mt-2">
-                    <div className="text-sm font-medium flex justify-between">
-                      <span>Maksimum Katılımcı:</span>
-                      <span className="font-bold">{Math.floor(parseFloat(formData.totalBudget) / 100)}</span>
+                {/* Tier Calculator Panel */}
+                {tier && tierConfig && estimates && (
+                  <div className="space-y-4 pt-2">
+                    {/* Tier Badge */}
+                    <div className="flex items-center justify-between p-3 rounded-lg border" style={{ borderColor: tierConfig.color, backgroundColor: `${tierConfig.color}10` }}>
+                      <span className="text-sm font-bold" style={{ color: tierConfig.color }}>{tierConfig.label}</span>
+                      <Badge variant="outline" style={{ borderColor: tierConfig.color, color: tierConfig.color }}>
+                        {tierConfig.duration} gün
+                      </Badge>
                     </div>
-                    <p className="text-[10px] text-muted-foreground mt-1">
-                      Her 1000 TL bütçe için 10 katılımcı hakkı tanımlanır.
-                    </p>
+
+                    {/* Key Metrics */}
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="p-2.5 rounded-lg bg-muted/50 border">
+                        <div className="flex items-center gap-1.5 mb-1">
+                          <Clock className="h-3 w-3 text-muted-foreground" />
+                          <span className="text-[10px] text-muted-foreground font-medium">Süre</span>
+                        </div>
+                        <p className="text-sm font-bold">{tierConfig.duration} gün</p>
+                      </div>
+                      <div className="p-2.5 rounded-lg bg-muted/50 border">
+                        <div className="flex items-center gap-1.5 mb-1">
+                          <TrendingUp className="h-3 w-3 text-muted-foreground" />
+                          <span className="text-[10px] text-muted-foreground font-medium">Komisyon</span>
+                        </div>
+                        <p className="text-sm font-bold">%{tierConfig.commission}</p>
+                      </div>
+                    </div>
+
+                    {/* Net Budget */}
+                    <div className="p-3 rounded-lg bg-green-500/10 border border-green-500/20">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-muted-foreground">Net Bütçe (Üreticilere)</span>
+                        <span className="text-sm font-bold text-green-500">
+                          {formatCurrency(budget * (100 - tierConfig.commission) / 100)}
+                        </span>
+                      </div>
+                    </div>
+
+                    <Separator />
+
+                    {/* Estimated Results */}
+                    <div className="space-y-2">
+                      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Tahmini Sonuçlar</p>
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between p-2 rounded-md bg-muted/30">
+                          <div className="flex items-center gap-1.5">
+                            <Eye className="h-3.5 w-3.5 text-blue-400" />
+                            <span className="text-xs text-muted-foreground">Erişim</span>
+                          </div>
+                          <span className="text-xs font-semibold">{formatNum(estimates.minViews)} - {formatNum(estimates.maxViews)}</span>
+                        </div>
+                        <div className="flex items-center justify-between p-2 rounded-md bg-muted/30">
+                          <div className="flex items-center gap-1.5">
+                            <Heart className="h-3.5 w-3.5 text-pink-400" />
+                            <span className="text-xs text-muted-foreground">Beğeni</span>
+                          </div>
+                          <span className="text-xs font-semibold">{formatNum(estimates.minLikes)} - {formatNum(estimates.maxLikes)}</span>
+                        </div>
+                        <div className="flex items-center justify-between p-2 rounded-md bg-muted/30">
+                          <div className="flex items-center gap-1.5">
+                            <Share2 className="h-3.5 w-3.5 text-purple-400" />
+                            <span className="text-xs text-muted-foreground">Paylaşım</span>
+                          </div>
+                          <span className="text-xs font-semibold">{formatNum(estimates.minShares)} - {formatNum(estimates.maxShares)}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Unlimited Participation */}
+                    <div className="flex items-center gap-2 p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
+                      <Users className="h-4 w-4 text-emerald-500" />
+                      <span className="text-xs font-medium text-emerald-500">Sınırsız Katılım</span>
+                    </div>
                   </div>
                 )}
 
@@ -552,11 +490,11 @@ export default function NewCampaignPage() {
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Süre</span>
-                  <span className="font-medium">
-                    {startDate && endDate
-                      ? `${Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24))} Gün`
-                      : "-"}
-                  </span>
+                  <span className="font-medium">{tierConfig ? `${tierConfig.duration} Gün` : "-"}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Komisyon</span>
+                  <span className="font-medium">{tierConfig ? `%${tierConfig.commission}` : "-"}</span>
                 </div>
                 <div className="flex justify-between items-center pt-2 text-lg font-bold">
                   <span>Toplam</span>
@@ -568,14 +506,14 @@ export default function NewCampaignPage() {
 
               <Button
                 onClick={handleSubmit}
-                disabled={isLoading || !formData.songId || !formData.totalBudget}
+                disabled={isLoading || !formData.songId || !formData.totalBudget || !tier}
                 className="w-full h-12 text-lg font-semibold shadow-md transition-all hover:shadow-lg hover:scale-[1.02]"
               >
                 {isLoading ? "Oluşturuluyor..." : "Kampanyayı Başlat"}
               </Button>
 
               <p className="text-[10px] text-center text-muted-foreground">
-                "Kampanyayı Başlat" butonuna tıklayarak Hizmet Koşullarımızı kabul etmiş olursunuz.
+                Kampanya, yönetici onayından sonra aktif olacaktır. Süre onay tarihinden itibaren başlar.
               </p>
 
             </CardContent>

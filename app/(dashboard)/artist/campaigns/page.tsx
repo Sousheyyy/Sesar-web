@@ -116,7 +116,7 @@ export default async function ArtistCampaignsPage() {
   // Campaign Card Component
   const CampaignCard = ({ campaign, isMarketplace = false }: { campaign: any; isMarketplace?: boolean }) => {
     const engagement = calculateEngagement(campaign.submissions);
-    const maxEarnings = (Number(campaign.totalBudget) * (100 - campaign.platformFeePercent - campaign.safetyReservePercent) / 100) * 0.4;
+    const maxEarnings = (Number(campaign.totalBudget) * (100 - (campaign.commissionPercent || 20)) / 100) * 0.4;
     
     return (
       <Link key={campaign.id} href={`/artist/campaigns/${campaign.id}`}>

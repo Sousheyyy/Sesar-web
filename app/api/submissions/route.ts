@@ -103,46 +103,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // CHECK NEW LIMITS
-
-    // 1. PRO Only Check
-    if (campaign.isProOnly) {
-      // Assuming UserPlan enum: FREE, PRO, ARTIST
-      if (session.user.plan !== "PRO" && session.user.plan !== "ARTIST") {
-        return NextResponse.json(
-          { error: "This campaign is exclusive to PRO members." },
-          { status: 403 }
-        );
-      }
-    }
-
-    // 2. Target Tiers Check
-    // If targetTiers is not empty, user must be in one of them
-    if (campaign.targetTiers && campaign.targetTiers.length > 0) {
-      if (!user.creatorTier || !campaign.targetTiers.includes(user.creatorTier)) {
-        return NextResponse.json(
-          { error: `This campaign is only for creators in tiers: ${campaign.targetTiers.join(", ")}` },
-          { status: 403 }
-        );
-      }
-    }
-
-    // 3. Max Participants Check (Soft Limit)
-    // We count all submissions that are NOT rejected
-    const currentParticipants = await prisma.submission.count({
-      where: {
-        campaignId,
-        status: { not: "REJECTED" }
-      }
-    });
-
-    if (currentParticipants >= campaign.maxParticipants) {
-      return NextResponse.json(
-        { error: "This campaign has reached its maximum number of participants." },
-        { status: 400 }
-      );
-    }
-
     // If there's a rejected submission, update it instead of creating a new one
     let submission;
     if (existingSubmission && existingSubmission.status === "REJECTED") {

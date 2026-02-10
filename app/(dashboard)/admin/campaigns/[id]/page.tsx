@@ -77,8 +77,9 @@ export default async function AdminCampaignDetailPage({
     0
   );
   
-  // Calculate creator pool (distributable budget after fees)
-  const creatorPoolPercent = 100 - campaign.platformFeePercent - campaign.safetyReservePercent;
+  // Calculate creator pool (distributable budget after commission)
+  const commissionPercent = campaign.commissionPercent || 20;
+  const creatorPoolPercent = 100 - commissionPercent;
   const creatorPool = (Number(campaign.totalBudget) * creatorPoolPercent) / 100;
 
   // Format duration from seconds to MM:SS
@@ -305,19 +306,17 @@ export default async function AdminCampaignDetailPage({
         )}
 
         {campaign.status === "PENDING_APPROVAL" ? (
-          <CampaignApprovalSection 
+          <CampaignApprovalSection
             campaignId={campaign.id}
             totalBudget={Number(campaign.totalBudget)}
-            initialPlatformFeePercent={campaign.platformFeePercent}
-            initialSafetyReservePercent={campaign.safetyReservePercent}
+            commissionPercent={commissionPercent}
             status={campaign.status}
           />
         ) : (
-           <CampaignApprovalSection 
+           <CampaignApprovalSection
             campaignId={campaign.id}
             totalBudget={Number(campaign.totalBudget)}
-            initialPlatformFeePercent={campaign.platformFeePercent}
-            initialSafetyReservePercent={campaign.safetyReservePercent}
+            commissionPercent={commissionPercent}
             status={campaign.status}
           />
         )}
@@ -434,17 +433,14 @@ export default async function AdminCampaignDetailPage({
                   İçerik Üretici Kriterleri
                 </div>
                 <div className="space-y-2">
-                  {campaign.minFollowers ? (
-                    <div className="flex justify-between items-center">
-                      <span className="text-sm text-muted-foreground">Min. Takipçi</span>
-                      <span className="font-semibold">{campaign.minFollowers.toLocaleString()}</span>
-                    </div>
-                  ) : (
-                    <div className="flex justify-between items-center">
-                      <span className="text-sm text-muted-foreground">Min. Takipçi</span>
-                      <span className="font-semibold text-muted-foreground">Yok</span>
-                    </div>
-                  )}
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm text-muted-foreground">Katılım</span>
+                    <span className="font-semibold text-emerald-500">Herkese Açık</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm text-muted-foreground">Komisyon</span>
+                    <span className="font-semibold">%{commissionPercent}</span>
+                  </div>
                   {campaign.minVideoDuration ? (
                     <div className="flex justify-between items-center">
                       <span className="text-sm text-muted-foreground">Min. Video Süresi</span>
@@ -523,11 +519,11 @@ export default async function AdminCampaignDetailPage({
                 </div>
                 <div className="flex flex-col">
                   <span className="text-xs text-muted-foreground">Başlangıç Tarihi</span>
-                  <span className="text-sm font-medium">{formatDate(campaign.startDate)}</span>
+                  <span className="text-sm font-medium">{campaign.startDate ? formatDate(campaign.startDate) : 'Onay bekleniyor'}</span>
                 </div>
                 <div className="flex flex-col">
                   <span className="text-xs text-muted-foreground">Bitiş Tarihi</span>
-                  <span className="text-sm font-medium">{formatDate(campaign.endDate)}</span>
+                  <span className="text-sm font-medium">{campaign.endDate ? formatDate(campaign.endDate) : `Onaydan ${campaign.durationDays || 7} gün sonra`}</span>
                 </div>
                 <div className="flex flex-col">
                   <span className="text-xs text-muted-foreground">Durum</span>

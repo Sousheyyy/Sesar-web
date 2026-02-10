@@ -4,7 +4,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { Context } from "../context";
-import { getCreatorTierFromFollowers, isCreatorEligibleForCampaign } from "../lib/tierUtils";
+import { getCampaignTierFromBudget, getDurationForTier, getCommissionForTier } from "../lib/tierUtils";
 
 // Minimal tRPC setup for type compatibility
 // This app uses REST API routes, but tRPC types are imported for compatibility
@@ -104,7 +104,7 @@ export const appRouter = t.router({
   getActiveCampaigns: t.procedure
     .input(z.object({
       search: z.string().optional(),
-      tier: z.enum(['D', 'C', 'B', 'A', 'S']).optional(),
+      tier: z.enum(['C', 'B', 'A', 'S']).optional(),
       limit: z.number().optional().default(100)
     }).optional())
     .query(async ({ input }) => {
@@ -114,7 +114,10 @@ export const appRouter = t.router({
 
       const where: any = {
         status: "ACTIVE",
-        endDate: { gt: new Date() }
+        OR: [
+          { endDate: { gt: new Date() } },
+          { endDate: null }
+        ]
       };
 
       // Server-side search
@@ -140,15 +143,10 @@ export const appRouter = t.router({
           status: true,
           tier: true,
           totalBudget: true,
-          maxSubmissions: true,
-          maxParticipants: true, // NEW
-          isProOnly: true,       // NEW
-          targetTiers: true,     // NEW
           endDate: true,
-          minFollowers: true,
+          durationDays: true,
+          commissionPercent: true,
           minVideoDuration: true,
-          platformFeePercent: true,
-          safetyReservePercent: true,
           song: {
             select: {
               title: true,
@@ -203,10 +201,9 @@ export const appRouter = t.router({
           title: true,
           status: true,
           totalBudget: true,
-          maxSubmissions: true,
           endDate: true,
-          platformFeePercent: true,
-          safetyReservePercent: true,
+          durationDays: true,
+          commissionPercent: true,
           submissions: {
             where: { creatorId: userId },
             select: {
@@ -265,7 +262,7 @@ export const appRouter = t.router({
         prisma.campaign.count({
           where: {
             status: "ACTIVE",
-            endDate: { gt: new Date() }
+            OR: [{ endDate: { gt: new Date() } }, { endDate: null }]
           }
         }),
 
@@ -274,7 +271,7 @@ export const appRouter = t.router({
           where: {
             artistId: userId,
             status: "ACTIVE",
-            endDate: { gt: new Date() }
+            OR: [{ endDate: { gt: new Date() } }, { endDate: null }]
           }
         }),
 
@@ -282,7 +279,7 @@ export const appRouter = t.router({
         prisma.campaign.count({
           where: {
             status: "ACTIVE",
-            endDate: { gt: new Date() },
+            OR: [{ endDate: { gt: new Date() } }, { endDate: null }],
             submissions: {
               some: { creatorId: userId }
             }
@@ -896,18 +893,6 @@ export const appRouter = t.router({
       if (!campaign) throw new Error("CAMPAIGN_NOT_FOUND");
       if (campaign.status !== "ACTIVE") throw new Error("CAMPAIGN_NOT_ACTIVE");
 
-      // Check tier eligibility - creators can only join campaigns at their tier or lower
-      if (!isCreatorEligibleForCampaign(user.creatorTier, campaign.tier)) {
-        const tierNames = { D: 'D', C: 'C (<1k takipçi)', B: 'B (1k-3k)', A: 'A (3k-5k)', S: 'S (5k+)' };
-        const requiredTier = tierNames[campaign.tier] || campaign.tier;
-        const userTier = user.creatorTier ? tierNames[user.creatorTier] : 'Yok';
-        throw new Error(`TIER_NOT_ELIGIBLE: Bu kampanya ${requiredTier} tier gerektiriyor. Senin tier'in: ${userTier}. TikTok hesabını bağlayıp takipçi sayını doğrulaman gerekir.`);
-      }
-
-      if (campaign._count.submissions >= campaign.maxSubmissions) {
-        throw new Error("CAMPAIGN_FULL");
-      }
-
       // 1. Extract video metadata and validate
       const { tiktokMetadata } = await import("@/lib/tiktok-metadata");
 
@@ -1011,10 +996,8 @@ export const appRouter = t.router({
       tiktokUrl: z.string().url(),
       title: z.string().min(1),
       description: z.string().optional(),
-      budget: z.number().min(150000), // Minimum 15,000 TL budget (in TP: 150,000)
+      budget: z.number().min(200000).max(10000000), // 20,000 - 1,000,000 TL (in TP)
       minVideoDuration: z.number().optional(),
-      startDate: z.string().optional(),
-      endDate: z.string().optional(),
     }))
     .mutation(async ({ input, ctx }) => {
       const userId = ctx.user?.id;
@@ -1023,7 +1006,7 @@ export const appRouter = t.router({
       }
 
       // Import tier utilities
-      const { getCampaignTierFromBudget, getMinFollowersForTier, getMaxSubmissionsFromBudget } =
+      const { getCampaignTierFromBudget: getTier, getDurationForTier: getDuration, getCommissionForTier: getCommission } =
         await import("@/server/lib/tierUtils");
 
       // 1. Extract song metadata from TikTok
@@ -1056,18 +1039,15 @@ export const appRouter = t.router({
         });
       }
 
-      // Parse dates
-      const startDate = input.startDate ? new Date(input.startDate) : new Date();
-      const endDate = input.endDate ? new Date(input.endDate) : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-
       // 3. Calculate tier-based values
       const budgetTP = input.budget;
       const budgetTL = budgetTP / 10; // 10 TP = 1 TL Conversion
 
-      // Calculate campaign tier and auto-set requirements
+      // Calculate campaign tier and auto-set duration/commission
       const campaignTier = getCampaignTierFromBudget(budgetTL);
-      const minFollowers = getMinFollowersForTier(campaignTier);
-      const maxSubmissions = getMaxSubmissionsFromBudget(budgetTL);
+      if (!campaignTier) throw new Error("INVALID_BUDGET");
+      const durationDays = getDurationForTier(campaignTier);
+      const commissionPercent = getCommissionForTier(campaignTier);
 
       // 4. Deduction & Creation (Transaction)
       const campaign = await prisma.$transaction(async (tx) => {
@@ -1096,7 +1076,7 @@ export const appRouter = t.router({
           }
         });
 
-        // Create Campaign with tier
+        // Create Campaign with tier (dates set on admin approval)
         return await tx.campaign.create({
           data: {
             title: input.title,
@@ -1107,11 +1087,11 @@ export const appRouter = t.router({
             tier: campaignTier, // Auto-calculated tier
             songId: song.id,
             artistId: userId,
-            minFollowers: minFollowers, // Auto-calculated from tier
             minVideoDuration: input.minVideoDuration,
-            maxSubmissions: maxSubmissions, // Auto-calculated from budget
-            startDate: startDate,
-            endDate: endDate
+            durationDays: durationDays, // Auto-calculated from tier
+            commissionPercent: commissionPercent, // Auto-calculated from tier
+            startDate: null, // Set on admin approval
+            endDate: null, // Set as startDate + durationDays on approval
           }
         });
       });
@@ -1157,12 +1137,10 @@ export const appRouter = t.router({
           status: true,
           tier: true,
           totalBudget: true,
-          maxSubmissions: true,
           startDate: true,
           endDate: true,
-          minFollowers: true,
-          platformFeePercent: true,
-          safetyReservePercent: true,
+          durationDays: true,
+          commissionPercent: true,
           artistId: true,
           song: {
             select: {
@@ -1246,7 +1224,7 @@ export const appRouter = t.router({
         .filter(s => {
           if (!s.campaign) return false;
           // Campaign is ended if status is COMPLETED OR endDate has passed
-          const campaignEnded = s.campaign.status === 'COMPLETED' || new Date(s.campaign.endDate) < new Date();
+          const campaignEnded = s.campaign.status === 'COMPLETED' || (s.campaign.endDate && new Date(s.campaign.endDate) < new Date());
           return campaignEnded; // Only ended campaigns
         })
         .reduce((sum, s) => sum + Number(s.totalEarnings), 0);
@@ -1256,7 +1234,7 @@ export const appRouter = t.router({
         .filter(s => {
           if (!s.campaign) return false;
           // Campaign is ended if status is COMPLETED OR endDate has passed
-          const campaignEnded = s.campaign.status === 'COMPLETED' || new Date(s.campaign.endDate) < new Date();
+          const campaignEnded = s.campaign.status === 'COMPLETED' || (s.campaign.endDate && new Date(s.campaign.endDate) < new Date());
           return !campaignEnded; // Only active campaigns
         })
         .reduce((sum, s) => sum + Number(s.estimatedEarnings), 0);
@@ -1268,7 +1246,7 @@ export const appRouter = t.router({
         if (s.status !== "APPROVED") return false;
         if (!s.campaign) return false;
         // Campaign is ended if status is COMPLETED OR endDate has passed
-        const campaignEnded = s.campaign.status === 'COMPLETED' || new Date(s.campaign.endDate) < new Date();
+        const campaignEnded = s.campaign.status === 'COMPLETED' || (s.campaign.endDate && new Date(s.campaign.endDate) < new Date());
         return !campaignEnded; // Only count active campaigns
       }).length;
 
@@ -1276,7 +1254,7 @@ export const appRouter = t.router({
       // OPTIMIZED: Filter from already-fetched submissions instead of separate query
       const endedSubmissions = submissions.filter(s => {
         const campaign = s.campaign;
-        return campaign && (campaign.status === 'COMPLETED' || new Date(campaign.endDate) < new Date());
+        return campaign && (campaign.status === 'COMPLETED' || (campaign.endDate && new Date(campaign.endDate) < new Date()));
       });
 
       const avgContributionPercent = endedSubmissions.length > 0
@@ -1303,6 +1281,7 @@ export const appRouter = t.router({
       const finishedSubmissions = submissions.filter(s =>
         s.status === 'APPROVED' &&
         s.campaign &&
+        s.campaign.endDate &&
         new Date(s.campaign.endDate) < new Date()
       ).slice(0, 20);
 
@@ -1342,7 +1321,7 @@ export const appRouter = t.router({
           .filter(s => {
             if (!s.campaign) return false;
             // Only include submissions from active campaigns
-            const campaignEnded = s.campaign.status === 'COMPLETED' || new Date(s.campaign.endDate) < new Date();
+            const campaignEnded = s.campaign.status === 'COMPLETED' || (s.campaign.endDate && new Date(s.campaign.endDate) < new Date());
             return !campaignEnded;
           })
           .slice(0, 10),
@@ -1401,7 +1380,7 @@ export const appRouter = t.router({
           where: {
             artistId: userId,
             status: "ACTIVE",
-            endDate: { gt: new Date() }
+            OR: [{ endDate: { gt: new Date() } }, { endDate: null }]
           },
           select: {
             id: true,
@@ -1410,9 +1389,10 @@ export const appRouter = t.router({
             tier: true,
             totalBudget: true,
             remainingBudget: true,
-            maxSubmissions: true,
             startDate: true,
             endDate: true,
+            durationDays: true,
+            commissionPercent: true,
             song: {
               select: {
                 title: true,

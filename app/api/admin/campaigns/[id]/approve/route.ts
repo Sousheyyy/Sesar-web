@@ -24,39 +24,6 @@ export async function POST(
       );
     }
 
-    const { platformFeePercent, safetyReservePercent } = await req.json();
-
-    // Validate percentages
-    if (
-      typeof platformFeePercent !== "number" ||
-      platformFeePercent < 0 ||
-      platformFeePercent > 100
-    ) {
-      return NextResponse.json(
-        { error: "Invalid platform fee percentage" },
-        { status: 400 }
-      );
-    }
-
-    if (
-      typeof safetyReservePercent !== "number" ||
-      safetyReservePercent < 0 ||
-      safetyReservePercent > 100
-    ) {
-      return NextResponse.json(
-        { error: "Invalid safety reserve percentage" },
-        { status: 400 }
-      );
-    }
-
-    // Ensure total doesn't exceed 100%
-    if (platformFeePercent + safetyReservePercent >= 100) {
-      return NextResponse.json(
-        { error: "Combined fees cannot be 100% or more" },
-        { status: 400 }
-      );
-    }
-
     const campaign = await prisma.campaign.findUnique({
       where: { id: params.id },
     });
@@ -75,13 +42,17 @@ export async function POST(
       );
     }
 
-    // Approve the campaign
+    // Timer starts from approval - set startDate and endDate
+    const now = new Date();
+    const endDate = new Date(now.getTime() + campaign.durationDays * 24 * 60 * 60 * 1000);
+
+    // Approve the campaign with dates
     const updatedCampaign = await prisma.campaign.update({
       where: { id: params.id },
       data: {
         status: "ACTIVE",
-        platformFeePercent,
-        safetyReservePercent,
+        startDate: now,
+        endDate: endDate,
       },
       include: {
         song: true,
@@ -100,7 +71,7 @@ export async function POST(
       data: {
         userId: campaign.artistId,
         title: "Kampanya Onaylandı",
-        message: `"${campaign.title}" kampanyanız onaylandı ve şimdi aktif!`,
+        message: `"${campaign.title}" kampanyanız onaylandı ve şimdi aktif! Kampanya ${campaign.durationDays} gün sürecek.`,
         link: `/artist/campaigns/${campaign.id}`,
       },
     });
@@ -114,9 +85,3 @@ export async function POST(
     );
   }
 }
-
-
-
-
-
-

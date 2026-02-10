@@ -49,10 +49,9 @@ export class CalculationService {
      */
     static calculateNetBudget(
         totalBudget: number,
-        platformFeePercent: number,
-        safetyReservePercent: number
+        commissionPercent: number
     ) {
-        const netMultiplier = (100 - platformFeePercent - safetyReservePercent) / 100;
+        const netMultiplier = (100 - commissionPercent) / 100;
         const netBudgetTP = totalBudget * 10 * netMultiplier;
 
         return { netBudgetTP, netMultiplier };
@@ -103,8 +102,7 @@ export class CalculationService {
         // Calculate net budget
         const { netBudgetTP } = this.calculateNetBudget(
             Number(submission.campaign.totalBudget),
-            submission.campaign.platformFeePercent,
-            submission.campaign.safetyReservePercent
+            submission.campaign.commissionPercent
         );
 
         // Only update points here - share percentages will be calculated
@@ -201,8 +199,7 @@ export class CalculationService {
         // Calculate net budget
         const { netBudgetTP } = this.calculateNetBudget(
             Number(campaign.totalBudget),
-            campaign.platformFeePercent,
-            campaign.safetyReservePercent
+            campaign.commissionPercent
         );
 
         // Step 1: Calculate raw percentages for all submissions
@@ -333,8 +330,7 @@ export class CalculationService {
         // Calculate net budget
         const { netBudgetTP, netMultiplier } = this.calculateNetBudget(
             Number(campaign.totalBudget),
-            campaign.platformFeePercent,
-            campaign.safetyReservePercent
+            campaign.commissionPercent
         );
 
         // Update campaign with calculated values

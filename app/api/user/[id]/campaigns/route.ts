@@ -50,8 +50,8 @@ export async function GET(
       ...campaign,
       totalBudget: Number(campaign.totalBudget),
       remainingBudget: Number(campaign.remainingBudget),
-      startDate: campaign.startDate.toISOString(),
-      endDate: campaign.endDate.toISOString(),
+      startDate: campaign.startDate?.toISOString() ?? null,
+      endDate: campaign.endDate?.toISOString() ?? null,
     }));
 
     return NextResponse.json({ campaigns: serializedCampaigns });

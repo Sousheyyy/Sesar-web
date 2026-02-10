@@ -74,7 +74,7 @@ export default async function CampaignDetailPage({
   );
   
   // Calculate creator pool (distributable budget after fees)
-  const creatorPoolPercent = 100 - campaign.platformFeePercent - campaign.safetyReservePercent;
+  const creatorPoolPercent = 100 - (campaign.commissionPercent || 20);
   const creatorPool = (Number(campaign.totalBudget) * creatorPoolPercent) / 100;
 
   // Format duration from seconds to MM:SS
@@ -223,12 +223,8 @@ export default async function CampaignDetailPage({
             </div>
             <div className="space-y-1 text-xs">
               <div className="flex justify-between text-muted-foreground">
-                <span>Platform ({campaign.platformFeePercent}%)</span>
-                <span>-{formatCurrency((Number(campaign.totalBudget) * campaign.platformFeePercent) / 100)}</span>
-              </div>
-              <div className="flex justify-between text-muted-foreground">
-                <span>Rezerv ({campaign.safetyReservePercent}%)</span>
-                <span>-{formatCurrency((Number(campaign.totalBudget) * campaign.safetyReservePercent) / 100)}</span>
+                <span>Komisyon ({campaign.commissionPercent || 20}%)</span>
+                <span>-{formatCurrency((Number(campaign.totalBudget) * (campaign.commissionPercent || 20)) / 100)}</span>
               </div>
               <div className="flex justify-between pt-1 border-t font-semibold text-primary">
                 <span>Dağıtılabilir</span>
@@ -397,17 +393,10 @@ export default async function CampaignDetailPage({
                   İçerik Üretici Kriterleri
                 </div>
                 <div className="space-y-2">
-                  {campaign.minFollowers ? (
-                    <div className="flex justify-between items-center">
-                      <span className="text-sm text-muted-foreground">Min. Takipçi</span>
-                      <span className="font-semibold">{campaign.minFollowers.toLocaleString()}</span>
-                    </div>
-                  ) : (
-                    <div className="flex justify-between items-center">
-                      <span className="text-sm text-muted-foreground">Min. Takipçi</span>
-                      <span className="font-semibold text-muted-foreground">Yok</span>
-                    </div>
-                  )}
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm text-muted-foreground">Katılım</span>
+                    <span className="font-semibold text-green-600">Herkese Açık</span>
+                  </div>
                   {campaign.minVideoDuration ? (
                     <div className="flex justify-between items-center">
                       <span className="text-sm text-muted-foreground">Min. Video Süresi</span>
@@ -486,11 +475,11 @@ export default async function CampaignDetailPage({
                 </div>
                 <div className="flex flex-col">
                   <span className="text-xs text-muted-foreground">Başlangıç Tarihi</span>
-                  <span className="text-sm font-medium">{formatDate(campaign.startDate)}</span>
+                  <span className="text-sm font-medium">{campaign.startDate ? formatDate(campaign.startDate) : "Onay bekleniyor"}</span>
                 </div>
                 <div className="flex flex-col">
                   <span className="text-xs text-muted-foreground">Bitiş Tarihi</span>
-                  <span className="text-sm font-medium">{formatDate(campaign.endDate)}</span>
+                  <span className="text-sm font-medium">{campaign.endDate ? formatDate(campaign.endDate) : `${campaign.durationDays || 7} gün (onay sonrası)`}</span>
                 </div>
                 <div className="flex flex-col">
                   <span className="text-xs text-muted-foreground">Durum</span>

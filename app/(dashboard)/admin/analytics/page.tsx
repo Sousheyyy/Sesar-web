@@ -120,8 +120,7 @@ export default async function AdminAnalyticsPage({ searchParams }: AdminAnalytic
       title: true,
       status: true,
       totalBudget: true,
-      platformFeePercent: true,
-      safetyReservePercent: true,
+      commissionPercent: true,
       createdAt: true,
       submissions: {
         where: dateFilter,
@@ -159,16 +158,9 @@ export default async function AdminAnalyticsPage({ searchParams }: AdminAnalytic
 
   const platformFees = approvedCampaigns.reduce((sum, c) => {
     const budget = Number(c.totalBudget) || 0;
-    const feePercent = c.platformFeePercent || 0;
-    const fee = (budget * feePercent) / 100;
+    const commission = c.commissionPercent || 20;
+    const fee = (budget * commission) / 100;
     return sum + (isNaN(fee) ? 0 : fee);
-  }, 0);
-
-  const safetyReserve = approvedCampaigns.reduce((sum, c) => {
-    const budget = Number(c.totalBudget) || 0;
-    const reservePercent = c.safetyReservePercent || 0;
-    const reserve = (budget * reservePercent) / 100;
-    return sum + (isNaN(reserve) ? 0 : reserve);
   }, 0);
 
   // Revenue = Platform Fees (income from approved campaigns)
@@ -213,8 +205,8 @@ export default async function AdminAnalyticsPage({ searchParams }: AdminAnalytic
     const date = new Date(campaign.createdAt);
     const dateKey = date.toISOString().split("T")[0]; // YYYY-MM-DD
     const budget = Number(campaign.totalBudget) || 0;
-    const feePercent = campaign.platformFeePercent || 0;
-    const fee = (budget * feePercent) / 100;
+    const commission = campaign.commissionPercent || 20;
+    const fee = (budget * commission) / 100;
     if (!isNaN(fee) && fee > 0) {
       revenueDataMap.set(dateKey, (revenueDataMap.get(dateKey) || 0) + fee);
     }
@@ -382,17 +374,6 @@ export default async function AdminAnalyticsPage({ searchParams }: AdminAnalytic
           modalType="platformFee"
           totalAmount={isNaN(platformFees) ? 0 : platformFees}
           className="border-purple-500/20"
-        />
-        <FinancialMetricCard
-          title="Güvenlik Rezervi"
-          value={formatCurrency(isNaN(safetyReserve) ? 0 : safetyReserve)}
-          description="Bekleyen bakiye"
-          icon={<DollarSign className="h-4 w-4 text-blue-400" />}
-          variant="primary"
-          modalTitle="Güvenlik Rezervi Detayları"
-          modalType="safetyReserve"
-          totalAmount={isNaN(safetyReserve) ? 0 : safetyReserve}
-          className="border-blue-500/20"
         />
       </div>
 

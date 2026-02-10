@@ -3,6 +3,7 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { UserRole } from "@prisma/client";
 import { logApiCallSimple, extractEndpoint } from "@/lib/api-logger-simple";
+import { getCampaignTierFromBudget, getDurationForTier, getCommissionForTier, MIN_BUDGET_TL, MAX_BUDGET_TL } from "@/server/lib/tierUtils";
 
 // Force dynamic rendering for Cloudflare Pages
 export const dynamic = 'force-dynamic';
@@ -27,62 +28,44 @@ export async function POST(req: NextRequest) {
       title,
       description,
       totalBudget,
-      minFollowers,
       minVideoDuration,
-      startDate,
-      endDate,
-      targetTiers, // NEW
-      isProOnly,   // NEW
     } = await req.json();
 
-    if (!songId || !title || !totalBudget || !startDate || !endDate) {
+    if (!songId || !title || !totalBudget) {
       return NextResponse.json(
         { error: "Missing required fields" },
         { status: 400 }
       );
     }
 
-    // Validate dates
-    const campaignStartDate = new Date(startDate);
-    const campaignEndDate = new Date(endDate);
-    const now = new Date();
-    now.setHours(0, 0, 0, 0); // Reset to start of today
-
-    if (campaignStartDate < now) {
-      return NextResponse.json(
-        { error: "Start date must be today or in the future" },
-        { status: 400 }
-      );
-    }
-
-    if (campaignEndDate <= campaignStartDate) {
-      return NextResponse.json(
-        { error: "End date must be after start date" },
-        { status: 400 }
-      );
-    }
-
     // Validate budget
-    if (totalBudget < 20000) {
+    if (totalBudget < MIN_BUDGET_TL) {
       return NextResponse.json(
-        { error: "Minimum campaign budget is ₺20,000" },
+        { error: `Minimum campaign budget is ₺${MIN_BUDGET_TL.toLocaleString()}` },
         { status: 400 }
       );
     }
 
-    // Calculate Campaign Tier based on Budget
-    let tier = "C";
-    if (totalBudget >= 100000) {
-      tier = "S";
-    } else if (totalBudget >= 70000) {
-      tier = "A";
-    } else if (totalBudget >= 40000) {
-      tier = "B";
+    if (totalBudget > MAX_BUDGET_TL) {
+      return NextResponse.json(
+        { error: `Maximum campaign budget is ₺${MAX_BUDGET_TL.toLocaleString()}` },
+        { status: 400 }
+      );
     }
 
-    // Calculate Max Participants (Automatic)
-    // Every 1000 TL = 10 participants => Budget / 100
-    const maxParticipants = Math.floor(totalBudget / 100);
+    // Auto-calculate tier, duration, and commission from budget
+    const tier = getCampaignTierFromBudget(totalBudget);
+    if (!tier) {
+      return NextResponse.json(
+        { error: "Invalid budget amount" },
+        { status: 400 }
+      );
+    }
+
+    const durationDays = getDurationForTier(tier);
+    const commissionPercent = getCommissionForTier(tier);
+    const netMultiplier = (100 - commissionPercent) / 100;
+    const netBudgetTP = totalBudget * 10 * netMultiplier;
 
     // Check if user has sufficient balance
     const user = await prisma.user.findUnique({
@@ -109,14 +92,13 @@ export async function POST(req: NextRequest) {
     }
 
     // Create campaign and deduct balance in a transaction
+    // startDate and endDate are null - set on admin approval
     const campaign = await prisma.$transaction(async (tx) => {
-      // Deduct budget from user balance
       await tx.user.update({
         where: { id: session.user.id },
         data: { balance: { decrement: totalBudget } },
       });
 
-      // Create transaction record
       await tx.transaction.create({
         data: {
           userId: session.user.id,
@@ -127,7 +109,6 @@ export async function POST(req: NextRequest) {
         },
       });
 
-      // Create campaign (pending admin approval)
       return await tx.campaign.create({
         data: {
           songId,
@@ -136,15 +117,15 @@ export async function POST(req: NextRequest) {
           description: description || null,
           totalBudget,
           remainingBudget: totalBudget,
-          minFollowers: minFollowers || null,
           minVideoDuration: minVideoDuration || null,
-          startDate: campaignStartDate,
-          endDate: campaignEndDate,
+          startDate: null,
+          endDate: null,
           status: "PENDING_APPROVAL",
-          tier: tier as any, // Cast string to Tier enum
-          targetTiers: targetTiers || [],
-          isProOnly: isProOnly || false,
-          maxParticipants: maxParticipants,
+          tier: tier as any,
+          durationDays,
+          commissionPercent,
+          netMultiplier,
+          netBudgetTP,
         },
         include: {
           song: true,
@@ -153,7 +134,6 @@ export async function POST(req: NextRequest) {
     });
 
     const response = NextResponse.json(campaign, { status: 201 });
-    // Log API call
     logApiCallSimple(
       extractEndpoint(new URL(req.url).pathname),
       "POST",
@@ -167,7 +147,6 @@ export async function POST(req: NextRequest) {
       { error: "Failed to create campaign" },
       { status: 500 }
     );
-    // Log API call error
     try {
       const session = await auth();
       logApiCallSimple(

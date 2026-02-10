@@ -172,12 +172,11 @@ export async function updateEstimatedPayouts(campaignId: string) {
   if (!campaign) return;
   if (campaign.submissions.length === 0) return;
 
-  // 2. Calculate Creator Pool
+  // 2. Calculate Creator Pool (using tier-based commission)
   const totalBudget = Number(campaign.totalBudget);
-  const platformFeePercent = campaign.platformFeePercent;
-  const safetyReservePercent = campaign.safetyReservePercent;
+  const commissionPercent = campaign.commissionPercent;
 
-  const poolPercent = 100 - platformFeePercent - safetyReservePercent;
+  const poolPercent = 100 - commissionPercent;
   const poolAmount = (totalBudget * poolPercent) / 100;
 
   // 3. Calculate Distribution
@@ -238,12 +237,11 @@ export async function calculateCampaignPayouts(campaignId: string) {
     return { message: "No approved submissions to pay", payouts: [] };
   }
 
-  // 2. Calculate Creator Pool
+  // 2. Calculate Creator Pool (using tier-based commission)
   const totalBudget = Number(campaign.totalBudget);
-  const platformFeePercent = campaign.platformFeePercent;
-  const safetyReservePercent = campaign.safetyReservePercent;
+  const commissionPercent = campaign.commissionPercent;
 
-  const poolPercent = 100 - platformFeePercent - safetyReservePercent;
+  const poolPercent = 100 - commissionPercent;
   const poolAmount = (totalBudget * poolPercent) / 100;
 
   // 3. Calculate Distribution using shared logic

@@ -72,7 +72,7 @@ export default async function AdminCampaignsPage() {
                   {campaign.song.title} • {campaign.artist.name} tarafından
                 </p>
                 <p className="text-xs text-muted-foreground mt-1">
-                  Oluşturuldu: {formatDate(campaign.createdAt)} • Bitiş: {formatDate(campaign.endDate)}
+                  Oluşturuldu: {formatDate(campaign.createdAt)} {campaign.endDate ? `• Bitiş: ${formatDate(campaign.endDate)}` : `• ${campaign.durationDays || 7} gün`}
                 </p>
               </div>
               <div className="text-right space-y-1">
@@ -84,7 +84,7 @@ export default async function AdminCampaignsPage() {
                   {campaign._count.submissions} gönderi
                 </p>
                 <p className="text-sm text-muted-foreground">
-                  Max Kazanç: {formatCurrency((Number(campaign.totalBudget) * (100 - campaign.platformFeePercent - campaign.safetyReservePercent) / 100) * 0.4)}
+                  Max Kazanç: {formatCurrency((Number(campaign.totalBudget) * (100 - (campaign.commissionPercent || 20)) / 100) * 0.4)}
                 </p>
               </div>
             </div>

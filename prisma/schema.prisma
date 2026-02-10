@@ -18,7 +18,6 @@ enum UserRole {
 }
 
 enum Tier {
-  D
   C
   B
   A
@@ -174,18 +173,16 @@ model Campaign {
   totalBudget     Decimal        @db.Decimal(10, 2)
   remainingBudget Decimal        @db.Decimal(10, 2)
   
-  // Tier System (based on budget)
-  tier            Tier           @default(C) // C: 15-30k, B: 30-60k, A: 60-100k, S: 100k+
-  
+  // Tier System (based on budget: C: 20-40k, B: 40-70k, A: 70-100k, S: 100k+)
+  tier            Tier           @default(C)
+  durationDays    Int            @default(7)   // Auto-calculated: C=7, B=14, A=21, S=30
+
   // Payout System
-  platformFeePercent    Int      @default(20)  // Platform service fee percentage
-  safetyReservePercent  Int      @default(5)   // Safety reserve percentage
+  commissionPercent     Int      @default(20)  // Tier-based: C=20%, B=15%, A=12%, S=10%
   payoutStatus          PayoutStatus @default(PENDING)
-  
-  // Requirements (auto-calculated from tier)
-  minFollowers    Int            @default(0)
+
+  // Requirements
   minVideoDuration Int?          // in seconds
-  maxSubmissions  Int            @default(100)
   
   // Campaign details
   title           String
@@ -195,19 +192,14 @@ model Campaign {
   // Timestamps
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
-  startDate       DateTime       @default(now()) // Campaign start date
-  endDate         DateTime       // Campaign end date
+  startDate       DateTime?      // Set on admin approval (timer starts from approval)
+  endDate         DateTime?      // Auto-calculated: startDate + durationDays
   completedAt     DateTime?
 
-  // NEW: Campaign Limits & Targeting
-  targetTiers     Tier[]         @default([])   // Empty means ALL tiers allowed
-  isProOnly       Boolean        @default(false)
-  maxParticipants Int            @default(100)  // Soft limit calculated from budget
-  
-  // NEW: Computed fields for backend calculations
+  // Computed fields for backend calculations
   totalCampaignPoints Float        @default(0)  // Sum of all submission points
-  netBudgetTP         Float        @default(0)  // Budget after fees in TP
-  netMultiplier       Float        @default(0)  // (100 - platformFee - safetyReserve) / 100
+  netBudgetTP         Float        @default(0)  // Budget after commission in TP
+  netMultiplier       Float        @default(0)  // (100 - commissionPercent) / 100
   
   // Relations
   submissions     Submission[]

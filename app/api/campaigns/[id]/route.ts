@@ -101,7 +101,6 @@ export async function PATCH(
       title: updateData.title,
       description: updateData.description,
       status: updateData.status,
-      minFollowers: updateData.minFollowers,
       minVideoDuration: updateData.minVideoDuration,
     };
 

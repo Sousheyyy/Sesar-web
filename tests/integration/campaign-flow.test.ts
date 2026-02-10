@@ -32,12 +32,14 @@ describe('Campaign Flow Integration', () => {
         title: 'Test Campaign',
         artistId: userId,
         songId: song.id,
-        totalBudget: 500,
-        remainingBudget: 500,
-        maxSubmissions: 10,
+        totalBudget: 20000,
+        remainingBudget: 20000,
         status: 'ACTIVE',
         tier: 'C',
-        endDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+        durationDays: 7,
+        commissionPercent: 20,
+        startDate: new Date(),
+        endDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
       }
     });
     
