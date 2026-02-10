@@ -116,11 +116,24 @@ export async function uploadImageFromUrl(
   imageUrl: string
 ): Promise<string | null> {
   try {
-    const response = await fetch(imageUrl);
-    if (!response.ok) return null;
+    console.log("[uploadImageFromUrl] Downloading:", imageUrl.substring(0, 80));
+
+    const response = await fetch(imageUrl, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        Referer: "https://www.tiktok.com/",
+      },
+    });
+
+    if (!response.ok) {
+      console.error("[uploadImageFromUrl] Download failed:", response.status, response.statusText);
+      return null;
+    }
 
     const buffer = Buffer.from(await response.arrayBuffer());
     const contentType = response.headers.get("content-type") || "image/jpeg";
+    console.log("[uploadImageFromUrl] Downloaded", buffer.length, "bytes, type:", contentType);
 
     const { data, error } = await supabaseAdmin.storage
       .from(bucket)
@@ -130,14 +143,19 @@ export async function uploadImageFromUrl(
         upsert: true,
       });
 
-    if (error || !data) return null;
+    if (error || !data) {
+      console.error("[uploadImageFromUrl] Supabase upload failed:", error?.message);
+      return null;
+    }
 
     const {
       data: { publicUrl },
     } = supabaseAdmin.storage.from(bucket).getPublicUrl(data.path);
 
+    console.log("[uploadImageFromUrl] Success:", publicUrl);
     return publicUrl;
-  } catch {
+  } catch (err) {
+    console.error("[uploadImageFromUrl] Exception:", err);
     return null;
   }
 }

@@ -1080,6 +1080,16 @@ export const appRouter = t.router({
             statsLastFetched: new Date()
           },
         });
+      } else if (song.coverImage && !song.coverImage.includes('supabase')) {
+        // Song exists but cover is still a TikTok CDN URL — re-upload it
+        const storagePath = `${song.tiktokMusicId || song.id}/${Date.now()}.jpg`;
+        const permanentUrl = await uploadImageFromUrl(STORAGE_BUCKETS.COVERS, storagePath, song.coverImage);
+        if (permanentUrl) {
+          song = await prisma.song.update({
+            where: { id: song.id },
+            data: { coverImage: permanentUrl }
+          });
+        }
       }
 
       // 3. Calculate tier-based values
