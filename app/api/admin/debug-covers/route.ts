@@ -27,7 +27,7 @@ export async function GET() {
       },
     });
 
-    const diagnostics = [];
+    const diagnostics: any[] = [];
 
     for (const song of songs) {
       const coverUrl = song.coverImage!;
@@ -46,7 +46,7 @@ export async function GET() {
       }
 
       // If not on Supabase, try a test upload
-      let testUploadResult = null;
+      let testUploadResult: { success: boolean; url?: string } | null = null;
       if (!isSupabase) {
         const testPath = `debug-test/${song.tiktokMusicId || song.id}/${Date.now()}.jpg`;
         const result = await uploadImageFromUrl(STORAGE_BUCKETS.COVERS, testPath, coverUrl);
