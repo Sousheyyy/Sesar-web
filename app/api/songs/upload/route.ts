@@ -13,6 +13,7 @@ import { prisma } from '@/lib/prisma';
 import { apifyClient, ApifyError } from '@/lib/apify/client';
 import { TikTokUrlParser, ValidationError } from '@/lib/apify/url-utils';
 import { rateLimit } from '@/lib/rate-limit';
+import { uploadImageFromUrl, STORAGE_BUCKETS } from '@/lib/supabase/storage';
 
 // Force dynamic rendering
 export const dynamic = 'force-dynamic';
@@ -78,6 +79,28 @@ export async function POST(req: NextRequest) {
       if (existingSong) {
         console.log('✅ Song found in DB (cache hit)', { musicId, duration: Date.now() - startTime });
 
+        // Migrate cover to Supabase if it's still a TikTok CDN URL
+        if (existingSong.coverImage && !existingSong.coverImage.includes('supabase')) {
+          const storagePath = `${existingSong.tiktokMusicId || existingSong.id}/${Date.now()}.jpg`;
+          const permanentUrl = await uploadImageFromUrl(STORAGE_BUCKETS.COVERS, storagePath, existingSong.coverImage);
+          if (permanentUrl) {
+            console.log('✅ Existing song cover migrated to Supabase:', permanentUrl);
+            const updatedSong = await prisma.song.update({
+              where: { id: existingSong.id },
+              data: { coverImage: permanentUrl }
+            });
+            if (updatedSong.artistId === session.user.id) {
+              return NextResponse.json({
+                success: true,
+                song: updatedSong,
+                cached: true,
+                message: 'Müzik zaten kütüphanenizde mevcut',
+                existing: true
+              });
+            }
+          }
+        }
+
         // Return existing song if it belongs to this user
         if (existingSong.artistId === session.user.id) {
           return NextResponse.json({
@@ -121,7 +144,20 @@ export async function POST(req: NextRequest) {
       throw error;
     }
 
-    // 8. Save to database (upsert to handle race conditions)
+    // 8. Upload cover image to Supabase Storage (TikTok CDN URLs don't work on mobile)
+    let coverImageUrl = metadata.coverImage;
+    if (coverImageUrl) {
+      const storagePath = `${metadata.tiktokMusicId}/${Date.now()}.jpg`;
+      const permanentUrl = await uploadImageFromUrl(STORAGE_BUCKETS.COVERS, storagePath, coverImageUrl);
+      if (permanentUrl) {
+        console.log('✅ Cover uploaded to Supabase:', permanentUrl);
+        coverImageUrl = permanentUrl;
+      } else {
+        console.warn('⚠️ Cover upload to Supabase failed, keeping original URL');
+      }
+    }
+
+    // 9. Save to database (upsert to handle race conditions)
     const song = await prisma.song.upsert({
       where: { tiktokMusicId: metadata.tiktokMusicId },
       update: {
@@ -133,7 +169,7 @@ export async function POST(req: NextRequest) {
       create: {
         title: metadata.title,
         authorName: metadata.authorName,
-        coverImage: metadata.coverImage,
+        coverImage: coverImageUrl,
         tiktokUrl: normalizedUrl,
         tiktokMusicId: metadata.tiktokMusicId,
         musicCoverUrl: metadata.coverImage,

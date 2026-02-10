@@ -3,6 +3,7 @@ node_modules
 .DS_Store
 dist
 build
+nul
 .vscode
 .idea
 .next
