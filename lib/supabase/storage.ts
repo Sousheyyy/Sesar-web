@@ -106,6 +106,42 @@ export function generateFilePath(userId: string, filename: string): string {
   return `${userId}/${timestamp}-${randomString}.${extension}`;
 }
 
+/**
+ * Download an image from a URL and upload to Supabase Storage.
+ * Returns the public URL, or null if download/upload fails.
+ */
+export async function uploadImageFromUrl(
+  bucket: string,
+  path: string,
+  imageUrl: string
+): Promise<string | null> {
+  try {
+    const response = await fetch(imageUrl);
+    if (!response.ok) return null;
+
+    const buffer = Buffer.from(await response.arrayBuffer());
+    const contentType = response.headers.get("content-type") || "image/jpeg";
+
+    const { data, error } = await supabaseAdmin.storage
+      .from(bucket)
+      .upload(path, buffer, {
+        contentType,
+        cacheControl: "31536000",
+        upsert: true,
+      });
+
+    if (error || !data) return null;
+
+    const {
+      data: { publicUrl },
+    } = supabaseAdmin.storage.from(bucket).getPublicUrl(data.path);
+
+    return publicUrl;
+  } catch {
+    return null;
+  }
+}
+
 
 
 

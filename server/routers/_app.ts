@@ -5,12 +5,36 @@ import { prisma } from "@/lib/prisma";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { Context } from "../context";
 import { getCampaignTierFromBudget, getDurationForTier, getCommissionForTier } from "../lib/tierUtils";
+import { uploadImageFromUrl, STORAGE_BUCKETS } from "@/lib/supabase/storage";
 
 // Minimal tRPC setup for type compatibility
 // This app uses REST API routes, but tRPC types are imported for compatibility
 const t = initTRPC.context<Context>().create({
   transformer: superjson,
 });
+
+// Migrate a song's cover image from TikTok CDN to Supabase Storage (fire-and-forget)
+function migrateSongCoverIfNeeded(songId: string, coverImage: string | null) {
+  if (!coverImage) return;
+  // Skip if already a Supabase URL
+  if (coverImage.includes('supabase')) return;
+  // Only migrate TikTok CDN URLs
+  if (!coverImage.includes('tiktokcdn')) return;
+
+  // Fire-and-forget: don't await
+  (async () => {
+    try {
+      const storagePath = `migrate/${songId}/${Date.now()}.jpg`;
+      const permanentUrl = await uploadImageFromUrl(STORAGE_BUCKETS.COVERS, storagePath, coverImage);
+      if (permanentUrl) {
+        await prisma.song.update({
+          where: { id: songId },
+          data: { coverImage: permanentUrl }
+        });
+      }
+    } catch { /* silent fail for background migration */ }
+  })();
+}
 
 export const appRouter = t.router({
   health: t.procedure.query(() => {
@@ -149,6 +173,7 @@ export const appRouter = t.router({
           minVideoDuration: true,
           song: {
             select: {
+              id: true,
               title: true,
               coverImage: true,
               authorName: true,
@@ -159,6 +184,12 @@ export const appRouter = t.router({
         },
         orderBy: { createdAt: "desc" }
       });
+
+      // Migrate old TikTok CDN cover images to Supabase (fire-and-forget)
+      for (const c of campaigns) {
+        migrateSongCoverIfNeeded(c.song.id, c.song.coverImage);
+      }
+
       return campaigns;
     }),
   getJoinedCampaigns: t.procedure
@@ -307,6 +338,7 @@ export const appRouter = t.router({
           },
           song: {
             select: {
+              id: true,
               title: true,
               coverImage: true,
               duration: true,
@@ -326,6 +358,9 @@ export const appRouter = t.router({
       });
 
       if (!campaign) return null;
+
+      // Migrate old TikTok CDN cover images to Supabase (fire-and-forget)
+      migrateSongCoverIfNeeded(campaign.song.id, campaign.song.coverImage);
 
       // 2. Fetch My Submission (if logged in AND not the campaign owner)
       let mySubmission: Awaited<ReturnType<typeof prisma.submission.findFirst>> = null;
@@ -1025,13 +1060,21 @@ export const appRouter = t.router({
       });
 
       if (!song) {
+        // Upload cover image to Supabase Storage (TikTok CDN URLs don't work on mobile)
+        let coverImageUrl = songMetadata.coverUrl;
+        if (coverImageUrl) {
+          const storagePath = `${songMetadata.id}/${Date.now()}.jpg`;
+          const permanentUrl = await uploadImageFromUrl(STORAGE_BUCKETS.COVERS, storagePath, coverImageUrl);
+          if (permanentUrl) coverImageUrl = permanentUrl;
+        }
+
         song = await prisma.song.create({
           data: {
             title: songMetadata.title,
             authorName: songMetadata.authorName,
             tiktokUrl: input.tiktokUrl,
             tiktokMusicId: songMetadata.id,
-            coverImage: songMetadata.coverUrl,
+            coverImage: coverImageUrl,
             duration: songMetadata.duration,
             artistId: userId,
             statsLastFetched: new Date()
