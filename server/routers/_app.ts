@@ -46,8 +46,9 @@ async function fetchVideoViaInsightIQ(tiktokUrl: string): Promise<any> {
     "/v1/social/creators/contents/fetch",
     {
       method: "POST",
+      headers: { "Accept": "application/json" },
       body: JSON.stringify({
-        url: tiktokUrl,
+        content_url: tiktokUrl,
         work_platform_id: TIKTOK_WORK_PLATFORM_ID,
       })
     }
