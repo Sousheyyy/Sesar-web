@@ -29,7 +29,7 @@ async function insightiqFetch(path: string, opts: RequestInit = {}) {
   if (!res.ok) {
     const body = await res.text();
     console.error(`InsightIQ ${res.status} [${path}]:`, body);
-    throw new Error(`InsightIQ API error: ${res.status}`);
+    throw new Error(`InsightIQ ${res.status}: ${body.substring(0, 300)}`);
   }
   return res.json();
 }
