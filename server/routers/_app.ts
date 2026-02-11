@@ -7,6 +7,78 @@ import { Context } from "../context";
 import { getCampaignTierFromBudget, getDurationForTier, getCommissionForTier } from "../lib/tierUtils";
 import { uploadImageFromUrl, STORAGE_BUCKETS } from "@/lib/supabase/storage";
 
+// ─── InsightIQ (formerly Phyllo) helpers ───────────────────────
+const INSIGHTIQ_BASE_URL = process.env.INSIGHTIQ_BASE_URL || "https://api.staging.insightiq.ai";
+
+const getInsightIQAuthHeader = () => {
+  const id = process.env.INSIGHTIQ_CLIENT_ID;
+  const secret = process.env.INSIGHTIQ_CLIENT_SECRET;
+  if (!id || !secret) throw new Error("Missing INSIGHTIQ_CLIENT_ID or INSIGHTIQ_CLIENT_SECRET");
+  return `Basic ${Buffer.from(`${id}:${secret}`).toString("base64")}`;
+};
+
+async function insightiqFetch(path: string, opts: RequestInit = {}) {
+  const res = await fetch(`${INSIGHTIQ_BASE_URL}${path}`, {
+    ...opts,
+    headers: {
+      Authorization: getInsightIQAuthHeader(),
+      "Content-Type": "application/json",
+      ...((opts.headers as Record<string, string>) || {}),
+    },
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    console.error(`InsightIQ ${res.status} [${path}]:`, body);
+    throw new Error(`InsightIQ API error: ${res.status}`);
+  }
+  return res.json();
+}
+
+/**
+ * Fetch video content data from InsightIQ using async content fetch.
+ * Posts a job, then polls for results (max 30 seconds).
+ */
+async function fetchVideoViaInsightIQ(phylloAccountId: string, tiktokUrl: string): Promise<any> {
+  const jobResponse = await insightiqFetch(
+    "/v1/social/creators/async/contents",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        account_id: phylloAccountId,
+        url: tiktokUrl,
+      })
+    }
+  );
+
+  const jobId = jobResponse.id;
+  let attempts = 0;
+  const MAX_ATTEMPTS = 15;
+
+  while (attempts < MAX_ATTEMPTS) {
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    attempts++;
+
+    try {
+      const result = await insightiqFetch(
+        `/v1/social/creators/async/contents/fetch/${jobId}`
+      );
+
+      if (result.status === 'SUCCESS' && result.data?.length > 0) {
+        return result.data[0];
+      }
+      if (result.status === 'FAILURE') {
+        throw new Error("İçerik alınamadı");
+      }
+    } catch (e: any) {
+      if (e.message === "İçerik alınamadı") throw e;
+      console.error(`InsightIQ poll attempt ${attempts} failed:`, e.message);
+    }
+  }
+
+  throw new Error("Zaman aşımı. Lütfen tekrar deneyin.");
+}
+// ─── end InsightIQ helpers ─────────────────────────────────────
+
 // Minimal tRPC setup for type compatibility
 // This app uses REST API routes, but tRPC types are imported for compatibility
 const t = initTRPC.context<Context>().create({
@@ -728,19 +800,26 @@ export const appRouter = t.router({
 
       if (diffHours > 6) {
         try {
-          const { tiktokMetadata } = await import("@/lib/tiktok-metadata");
-          const videoData = await tiktokMetadata.getVideoMetadata(mySubmission.tiktokUrl);
-
-          finalSubmission = await prisma.submission.update({
-            where: { id: mySubmission.id },
-            data: {
-              lastViewCount: videoData.stats.views,
-              lastLikeCount: videoData.stats.likes,
-              lastCommentCount: videoData.stats.comments,
-              lastShareCount: videoData.stats.shares,
-              lastCheckedAt: new Date()
-            }
+          const refreshUser = await prisma.user.findUnique({
+            where: { id: userId },
+            select: { tiktokUserId: true }
           });
+
+          if (refreshUser?.tiktokUserId && mySubmission.tiktokUrl) {
+            const contentData = await fetchVideoViaInsightIQ(refreshUser.tiktokUserId, mySubmission.tiktokUrl);
+            const engagement = contentData.engagement || {};
+
+            finalSubmission = await prisma.submission.update({
+              where: { id: mySubmission.id },
+              data: {
+                lastViewCount: engagement.view_count || engagement.views || 0,
+                lastLikeCount: engagement.like_count || engagement.likes || 0,
+                lastCommentCount: engagement.comment_count || engagement.comments || 0,
+                lastShareCount: engagement.share_count || engagement.shares || 0,
+                lastCheckedAt: new Date()
+              }
+            });
+          }
         } catch (error) {
           console.error("Smart Refresh Failed:", error);
           // Fail silently and show old data
@@ -786,19 +865,29 @@ export const appRouter = t.router({
       });
       if (!campaign) throw new Error("CAMPAIGN_NOT_FOUND");
 
-      const user = await prisma.user.findUnique({ where: { id: ctx.user.id } });
+      const user = await prisma.user.findUnique({
+        where: { id: ctx.user.id },
+        select: { tiktokHandle: true, tiktokUserId: true }
+      });
       if (!user) throw new Error("USER_NOT_FOUND");
 
-      // Extract video metadata
-      const { tiktokMetadata } = await import("@/lib/tiktok-metadata");
+      if (!user.tiktokUserId) {
+        return {
+          isValid: false,
+          errors: ["TikTok hesabınız bağlı değil. Lütfen Ayarlar'dan TikTok hesabınızı bağlayın."],
+          video: null,
+          checks: {}
+        };
+      }
 
-      let videoData;
+      // Fetch video data via InsightIQ async content fetch
+      let contentData: any;
       try {
-        videoData = await tiktokMetadata.getVideoMetadata(input.tiktokUrl);
+        contentData = await fetchVideoViaInsightIQ(user.tiktokUserId, input.tiktokUrl);
       } catch (error: any) {
         return {
           isValid: false,
-          errors: [`Video validation failed: ${error.message}`],
+          errors: [`Video doğrulanamadı: ${error.message}`],
           video: null,
           checks: {}
         };
@@ -807,50 +896,57 @@ export const appRouter = t.router({
       const errors: string[] = [];
 
       // 1. Account Check
-      let isAccountMatch = false;
-      if (user.tiktokHandle) {
-        isAccountMatch = videoData.author.toLowerCase() === user.tiktokHandle.toLowerCase();
-        if (!isAccountMatch) {
-          errors.push(
-            `Account mismatch: Video belongs to @${videoData.author}, ` +
-            `but your account is @${user.tiktokHandle}`
-          );
-        }
-      } else {
-        errors.push("TikTok handle not set in profile");
+      const videoUsername = contentData.profile?.platform_username?.toLowerCase() || contentData.creator?.platform_username?.toLowerCase();
+      const isAccountMatch = !!(user.tiktokHandle && videoUsername && user.tiktokHandle.toLowerCase() === videoUsername);
+      if (!isAccountMatch) {
+        errors.push(`Hesap Uyuşmazlığı: Video @${videoUsername || 'bilinmeyen'} ait, hesabınız @${user.tiktokHandle}`);
       }
 
-      // 2. Song Check (EXACT MATCH ONLY)
-      const songMatch = tiktokMetadata.validateSongMatch(
-        {
-          id: campaign.song.tiktokMusicId!,
-          title: campaign.song.title,
-          authorName: campaign.song.authorName!
-        },
-        videoData.song
-      );
-
-      if (!songMatch.match) {
-        errors.push(`Song mismatch: ${songMatch.reason}`);
+      // 2. Song Check (title or music ID match)
+      const audioTrack = contentData.audio_track_info || contentData.music;
+      let isSongMatch = false;
+      if (audioTrack) {
+        const trackTitle = (audioTrack.title || audioTrack.name || '').toLowerCase();
+        const campaignSongTitle = (campaign.song.title || '').toLowerCase();
+        const titleMatch = trackTitle.includes(campaignSongTitle) || campaignSongTitle.includes(trackTitle);
+        const idMatch = !!(campaign.song.tiktokMusicId && (audioTrack.platform_audio_id || audioTrack.id) === campaign.song.tiktokMusicId);
+        isSongMatch = !!(titleMatch || idMatch);
+      }
+      if (!isSongMatch) {
+        errors.push(`Müzik Eşleşmedi: Kampanya şarkısı "${campaign.song.title}" videoda bulunamadı.`);
       }
 
       // 3. Duration Check
-      const durationMatch = !campaign.minVideoDuration || videoData.duration >= campaign.minVideoDuration;
+      const videoDuration = contentData.duration || 0;
+      const durationMatch = !campaign.minVideoDuration || videoDuration >= campaign.minVideoDuration;
       if (!durationMatch) {
-        errors.push(
-          `Video too short: ${videoData.duration}s ` +
-          `(min: ${campaign.minVideoDuration}s)`
-        );
+        errors.push(`Süre Yetersiz: Video ${videoDuration}sn (Min: ${campaign.minVideoDuration}sn)`);
       }
+
+      // 4. Public check (InsightIQ can only fetch public content)
+      const isPublic = true;
+
+      const engagement = contentData.engagement || {};
 
       return {
         isValid: errors.length === 0,
         errors,
-        video: videoData,
+        video: {
+          videoId: contentData.platform_content_id || contentData.id,
+          coverImage: contentData.thumbnail_url,
+          soundName: audioTrack?.title || audioTrack?.name || 'Bilinmeyen',
+          creatorUsername: videoUsername || '',
+          duration: videoDuration,
+          views: engagement.view_count || engagement.views || 0,
+          likes: engagement.like_count || engagement.likes || 0,
+          comments: engagement.comment_count || engagement.comments || 0,
+          shares: engagement.share_count || engagement.shares || 0,
+        },
         checks: {
           accountMatch: isAccountMatch,
-          songMatch: songMatch.match,
-          durationMatch
+          songMatch: isSongMatch,
+          durationMatch,
+          isPublic,
         }
       };
     }),
@@ -928,56 +1024,43 @@ export const appRouter = t.router({
       if (!campaign) throw new Error("CAMPAIGN_NOT_FOUND");
       if (campaign.status !== "ACTIVE") throw new Error("CAMPAIGN_NOT_ACTIVE");
 
-      // 1. Extract video metadata and validate
-      const { tiktokMetadata } = await import("@/lib/tiktok-metadata");
+      // 1. Get user's InsightIQ account for video verification
+      const fullUser = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { tiktokUserId: true, tiktokHandle: true }
+      });
+      if (!fullUser?.tiktokUserId) {
+        throw new Error("TIKTOK_NOT_LINKED");
+      }
 
-      let videoData;
+      // 2. Verify video via InsightIQ async content fetch
+      let contentData: any;
       try {
-        videoData = await tiktokMetadata.getVideoMetadata(input.tiktokUrl);
+        contentData = await fetchVideoViaInsightIQ(fullUser.tiktokUserId, input.tiktokUrl);
       } catch (error: any) {
         throw new Error(`INVALID_VIDEO: ${error.message}`);
       }
 
-      // 2. Get campaign with song info for validation
-      const campaignWithSong = await prisma.campaign.findUnique({
-        where: { id: input.campaignId },
-        include: { song: true }
-      });
+      const engagement = contentData.engagement || {};
 
-      if (!campaignWithSong) throw new Error("CAMPAIGN_NOT_FOUND");
-
-      // 3. Validate song match (EXACT MATCH ONLY)
-      const songMatch = tiktokMetadata.validateSongMatch(
-        {
-          id: campaignWithSong.song.tiktokMusicId!,
-          title: campaignWithSong.song.title,
-          authorName: campaignWithSong.song.authorName!
-        },
-        videoData.song
-      );
-
-      if (!songMatch.match) {
-        throw new Error(`SONG_MISMATCH: ${songMatch.reason}`);
-      }
-
-      // 4. Create Submission
+      // 3. Create Submission
       const submission = await prisma.submission.create({
         data: {
           campaignId: input.campaignId,
           creatorId: userId,
           tiktokUrl: input.tiktokUrl,
-          tiktokVideoId: videoData.id,
+          tiktokVideoId: contentData.platform_content_id || contentData.id || '',
           status: "APPROVED",
-          lastViewCount: videoData.stats.views,
-          lastLikeCount: videoData.stats.likes,
-          lastCommentCount: videoData.stats.comments,
-          lastShareCount: videoData.stats.shares,
-          videoDuration: videoData.duration,
+          lastViewCount: engagement.view_count || engagement.views || 0,
+          lastLikeCount: engagement.like_count || engagement.likes || 0,
+          lastCommentCount: engagement.comment_count || engagement.comments || 0,
+          lastShareCount: engagement.share_count || engagement.shares || 0,
+          videoDuration: contentData.duration || 0,
           lastCheckedAt: new Date()
         },
       });
 
-      // 3. Trigger backend calculations immediately
+      // 4. Trigger backend calculations immediately
       const { onSubmissionStatsUpdate } = await import('@/server/services/submissionHooks');
       await onSubmissionStatsUpdate(submission.id, prisma);
 
@@ -1044,26 +1127,26 @@ export const appRouter = t.router({
       const { getCampaignTierFromBudget: getTier, getDurationForTier: getDuration, getCommissionForTier: getCommission } =
         await import("@/server/lib/tierUtils");
 
-      // 1. Extract song metadata from TikTok
-      const { tiktokMetadata } = await import("@/lib/tiktok-metadata");
+      // 1. Extract song metadata from TikTok via Apify
+      const { apifyClient } = await import("@/lib/apify/client");
 
       let songMetadata;
       try {
-        songMetadata = await tiktokMetadata.getSongMetadata(input.tiktokUrl);
+        songMetadata = await apifyClient.fetchMusicMetadata(input.tiktokUrl);
       } catch (error: any) {
         throw new Error(`INVALID_SONG_URL: ${error.message}`);
       }
 
       // 2. Find or Create Song
       let song = await prisma.song.findFirst({
-        where: { tiktokMusicId: songMetadata.id }
+        where: { tiktokMusicId: songMetadata.tiktokMusicId }
       });
 
       if (!song) {
         // Upload cover image to Supabase Storage (TikTok CDN URLs don't work on mobile)
-        let coverImageUrl = songMetadata.coverUrl;
+        let coverImageUrl = songMetadata.coverImage;
         if (coverImageUrl) {
-          const storagePath = `${songMetadata.id}/${Date.now()}.jpg`;
+          const storagePath = `${songMetadata.tiktokMusicId}/${Date.now()}.jpg`;
           const permanentUrl = await uploadImageFromUrl(STORAGE_BUCKETS.COVERS, storagePath, coverImageUrl);
           if (permanentUrl) coverImageUrl = permanentUrl;
         }
@@ -1073,9 +1156,8 @@ export const appRouter = t.router({
             title: songMetadata.title,
             authorName: songMetadata.authorName,
             tiktokUrl: input.tiktokUrl,
-            tiktokMusicId: songMetadata.id,
+            tiktokMusicId: songMetadata.tiktokMusicId,
             coverImage: coverImageUrl,
-            duration: songMetadata.duration,
             artistId: userId,
             statsLastFetched: new Date()
           },
@@ -2176,25 +2258,38 @@ export const appRouter = t.router({
       if (campaign.artistId !== userId && ctx.user?.role !== "ADMIN") throw new Error("FORBIDDEN");
       if (campaign.status === "COMPLETED") throw new Error("CAMPAIGN_ALREADY_COMPLETED");
 
-      // 2. Refresh Metrics (outside transaction - can fail gracefully)
-      const { tiktokMetadata } = await import("@/lib/tiktok-metadata");
-      const submissions = campaign.submissions;
-      const CHUNK_SIZE = 5;
+      // 2. Refresh Metrics via InsightIQ (outside transaction - can fail gracefully)
+      // Re-fetch submissions with creator's tiktokUserId for InsightIQ calls
+      const subsWithCreator = await prisma.submission.findMany({
+        where: { campaignId: input.campaignId, status: { not: 'REJECTED' } },
+        include: { creator: { select: { tiktokUserId: true } } }
+      });
 
+      const CHUNK_SIZE = 3; // Lower chunk size for InsightIQ polling
       const refreshedMetrics: { id: string; views: number; likes: number; comments: number; shares: number }[] = [];
 
-      for (let i = 0; i < submissions.length; i += CHUNK_SIZE) {
-        const chunk = submissions.slice(i, i + CHUNK_SIZE);
+      for (let i = 0; i < subsWithCreator.length; i += CHUNK_SIZE) {
+        const chunk = subsWithCreator.slice(i, i + CHUNK_SIZE);
         await Promise.all(chunk.map(async (sub) => {
           try {
-            if (sub.tiktokUrl) {
-              const videoData = await tiktokMetadata.getVideoMetadata(sub.tiktokUrl);
+            if (sub.tiktokUrl && sub.creator?.tiktokUserId) {
+              const contentData = await fetchVideoViaInsightIQ(sub.creator.tiktokUserId, sub.tiktokUrl);
+              const engagement = contentData.engagement || {};
               refreshedMetrics.push({
                 id: sub.id,
-                views: videoData.stats.views,
-                likes: videoData.stats.likes,
-                comments: videoData.stats.comments,
-                shares: videoData.stats.shares
+                views: engagement.view_count || engagement.views || 0,
+                likes: engagement.like_count || engagement.likes || 0,
+                comments: engagement.comment_count || engagement.comments || 0,
+                shares: engagement.share_count || engagement.shares || 0
+              });
+            } else {
+              // No InsightIQ account, use existing metrics
+              refreshedMetrics.push({
+                id: sub.id,
+                views: sub.lastViewCount || 0,
+                likes: sub.lastLikeCount || 0,
+                comments: sub.lastCommentCount || 0,
+                shares: sub.lastShareCount || 0
               });
             }
           } catch (e) {
