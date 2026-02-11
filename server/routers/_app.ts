@@ -35,47 +35,29 @@ async function insightiqFetch(path: string, opts: RequestInit = {}) {
 }
 
 /**
- * Fetch video content data from InsightIQ using async content fetch.
- * Posts a job, then polls for results (max 30 seconds).
+ * Fetch video content data from InsightIQ using public content fetch.
+ * This is a synchronous endpoint — no polling needed.
+ * Uses url + work_platform_id (TikTok), does NOT require account_id.
  */
-async function fetchVideoViaInsightIQ(phylloAccountId: string, tiktokUrl: string): Promise<any> {
-  const jobResponse = await insightiqFetch(
-    "/v1/social/creators/async/contents",
+const TIKTOK_WORK_PLATFORM_ID = "de55aeec-0dc8-4119-bf90-16b3d1f0c987";
+
+async function fetchVideoViaInsightIQ(tiktokUrl: string): Promise<any> {
+  const response = await insightiqFetch(
+    "/v1/social/creators/contents/fetch",
     {
       method: "POST",
       body: JSON.stringify({
-        account_id: phylloAccountId,
         url: tiktokUrl,
+        work_platform_id: TIKTOK_WORK_PLATFORM_ID,
       })
     }
   );
 
-  const jobId = jobResponse.id;
-  let attempts = 0;
-  const MAX_ATTEMPTS = 15;
-
-  while (attempts < MAX_ATTEMPTS) {
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    attempts++;
-
-    try {
-      const result = await insightiqFetch(
-        `/v1/social/creators/async/contents/fetch/${jobId}`
-      );
-
-      if (result.status === 'SUCCESS' && result.data?.length > 0) {
-        return result.data[0];
-      }
-      if (result.status === 'FAILURE') {
-        throw new Error("İçerik alınamadı");
-      }
-    } catch (e: any) {
-      if (e.message === "İçerik alınamadı") throw e;
-      console.error(`InsightIQ poll attempt ${attempts} failed:`, e.message);
-    }
+  if (!response.data || response.data.length === 0) {
+    throw new Error("İçerik alınamadı. Video herkese açık olmalıdır.");
   }
 
-  throw new Error("Zaman aşımı. Lütfen tekrar deneyin.");
+  return response.data[0];
 }
 // ─── end InsightIQ helpers ─────────────────────────────────────
 
@@ -800,13 +782,8 @@ export const appRouter = t.router({
 
       if (diffHours > 6) {
         try {
-          const refreshUser = await prisma.user.findUnique({
-            where: { id: userId },
-            select: { tiktokUserId: true }
-          });
-
-          if (refreshUser?.tiktokUserId && mySubmission.tiktokUrl) {
-            const contentData = await fetchVideoViaInsightIQ(refreshUser.tiktokUserId, mySubmission.tiktokUrl);
+          if (mySubmission.tiktokUrl) {
+            const contentData = await fetchVideoViaInsightIQ(mySubmission.tiktokUrl);
             const engagement = contentData.engagement || {};
 
             finalSubmission = await prisma.submission.update({
@@ -880,10 +857,10 @@ export const appRouter = t.router({
         };
       }
 
-      // Fetch video data via InsightIQ async content fetch
+      // Fetch video data via InsightIQ public content fetch
       let contentData: any;
       try {
-        contentData = await fetchVideoViaInsightIQ(user.tiktokUserId, input.tiktokUrl);
+        contentData = await fetchVideoViaInsightIQ(input.tiktokUrl);
       } catch (error: any) {
         return {
           isValid: false,
@@ -1036,7 +1013,7 @@ export const appRouter = t.router({
       // 2. Verify video via InsightIQ async content fetch
       let contentData: any;
       try {
-        contentData = await fetchVideoViaInsightIQ(fullUser.tiktokUserId, input.tiktokUrl);
+        contentData = await fetchVideoViaInsightIQ(input.tiktokUrl);
       } catch (error: any) {
         throw new Error(`INVALID_VIDEO: ${error.message}`);
       }
@@ -2259,21 +2236,19 @@ export const appRouter = t.router({
       if (campaign.status === "COMPLETED") throw new Error("CAMPAIGN_ALREADY_COMPLETED");
 
       // 2. Refresh Metrics via InsightIQ (outside transaction - can fail gracefully)
-      // Re-fetch submissions with creator's tiktokUserId for InsightIQ calls
       const subsWithCreator = await prisma.submission.findMany({
         where: { campaignId: input.campaignId, status: { not: 'REJECTED' } },
-        include: { creator: { select: { tiktokUserId: true } } }
       });
 
-      const CHUNK_SIZE = 3; // Lower chunk size for InsightIQ polling
+      const CHUNK_SIZE = 5;
       const refreshedMetrics: { id: string; views: number; likes: number; comments: number; shares: number }[] = [];
 
       for (let i = 0; i < subsWithCreator.length; i += CHUNK_SIZE) {
         const chunk = subsWithCreator.slice(i, i + CHUNK_SIZE);
         await Promise.all(chunk.map(async (sub) => {
           try {
-            if (sub.tiktokUrl && sub.creator?.tiktokUserId) {
-              const contentData = await fetchVideoViaInsightIQ(sub.creator.tiktokUserId, sub.tiktokUrl);
+            if (sub.tiktokUrl) {
+              const contentData = await fetchVideoViaInsightIQ(sub.tiktokUrl);
               const engagement = contentData.engagement || {};
               refreshedMetrics.push({
                 id: sub.id,
@@ -2283,7 +2258,7 @@ export const appRouter = t.router({
                 shares: engagement.share_count || engagement.shares || 0
               });
             } else {
-              // No InsightIQ account, use existing metrics
+              // No TikTok URL, use existing metrics
               refreshedMetrics.push({
                 id: sub.id,
                 views: sub.lastViewCount || 0,
