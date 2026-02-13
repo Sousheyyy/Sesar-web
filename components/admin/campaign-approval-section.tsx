@@ -13,6 +13,7 @@ interface CampaignApprovalSectionProps {
   totalBudget: number;
   commissionPercent: number;
   status: string;
+  desiredStartDate?: string | null;
 }
 
 export function CampaignApprovalSection({
@@ -20,10 +21,13 @@ export function CampaignApprovalSection({
   totalBudget,
   commissionPercent,
   status,
+  desiredStartDate,
 }: CampaignApprovalSectionProps) {
   const router = useRouter();
   const [isApproving, setIsApproving] = useState(false);
   const [isRejecting, setIsRejecting] = useState(false);
+  const [rejectionReason, setRejectionReason] = useState("");
+  const [showRejectInput, setShowRejectInput] = useState(false);
 
   const commission = (totalBudget * commissionPercent) / 100;
   const creatorPool = totalBudget - commission;
@@ -51,7 +55,8 @@ export function CampaignApprovalSection({
   };
 
   const handleReject = async () => {
-    if (!confirm("Bu kampanyayı reddetmek istediğinizden emin misiniz? Bütçe sanatçıya iade edilecektir.")) {
+    if (!rejectionReason.trim()) {
+      toast.error("Lütfen ret sebebi girin");
       return;
     }
 
@@ -61,7 +66,7 @@ export function CampaignApprovalSection({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          reason: "Admin tarafından reddedildi",
+          reason: rejectionReason.trim(),
         }),
       });
 
@@ -111,29 +116,59 @@ export function CampaignApprovalSection({
             </div>
           </div>
 
+          {/* Desired Start Date */}
+          {desiredStartDate && status === "PENDING_APPROVAL" && (
+            <div className="rounded-lg border p-3 bg-blue-500/10 border-blue-500/30">
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">Sanatçının İstediği Başlangıç:</span>
+                <span className="font-medium">{new Date(desiredStartDate).toLocaleDateString("tr-TR", { day: "numeric", month: "long", year: "numeric" })}</span>
+              </div>
+            </div>
+          )}
+
           <div className="pt-4">
             {status === "PENDING_APPROVAL" ? (
-              <div className="flex gap-4">
-                <Button
-                  onClick={handleApprove}
-                  disabled={isApproving || isRejecting}
-                  className="flex-1 bg-green-600 hover:bg-green-700"
-                  size="lg"
-                >
-                  <CheckCircle className="mr-2 h-5 w-5" />
-                  {isApproving ? "Onaylanıyor..." : "Kampanyayı Onayla"}
-                </Button>
+              <div className="space-y-4">
+                <div className="flex gap-4">
+                  <Button
+                    onClick={handleApprove}
+                    disabled={isApproving || isRejecting}
+                    className="flex-1 bg-green-600 hover:bg-green-700"
+                    size="lg"
+                  >
+                    <CheckCircle className="mr-2 h-5 w-5" />
+                    {isApproving ? "Onaylanıyor..." : "Kampanyayı Onayla"}
+                  </Button>
 
-                <Button
-                  onClick={handleReject}
-                  disabled={isApproving || isRejecting}
-                  variant="destructive"
-                  className="flex-1"
-                  size="lg"
-                >
-                  <XCircle className="mr-2 h-5 w-5" />
-                  {isRejecting ? "Reddediliyor..." : "Kampanyayı Reddet"}
-                </Button>
+                  <Button
+                    onClick={() => showRejectInput ? handleReject() : setShowRejectInput(true)}
+                    disabled={isApproving || isRejecting}
+                    variant="destructive"
+                    className="flex-1"
+                    size="lg"
+                  >
+                    <XCircle className="mr-2 h-5 w-5" />
+                    {isRejecting ? "Reddediliyor..." : showRejectInput ? "Reddi Onayla" : "Kampanyayı Reddet"}
+                  </Button>
+                </div>
+
+                {showRejectInput && (
+                  <div className="space-y-2">
+                    <textarea
+                      value={rejectionReason}
+                      onChange={(e) => setRejectionReason(e.target.value)}
+                      placeholder="Ret sebebini yazın (zorunlu)..."
+                      className="w-full rounded-lg border border-red-300 bg-red-50 dark:bg-red-950/20 dark:border-red-800 p-3 text-sm min-h-[80px] focus:outline-none focus:ring-2 focus:ring-red-500"
+                    />
+                    <Button
+                      onClick={() => { setShowRejectInput(false); setRejectionReason(""); }}
+                      variant="ghost"
+                      size="sm"
+                    >
+                      Vazgeç
+                    </Button>
+                  </div>
+                )}
               </div>
             ) : null}
           </div>

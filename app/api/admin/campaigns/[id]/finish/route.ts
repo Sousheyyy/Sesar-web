@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth-utils";
 import { prisma } from "@/lib/prisma";
-import { refreshCampaignMetrics, calculateCampaignPayouts } from "@/lib/payout";
+import { calculateCampaignPayouts } from "@/lib/payout";
 
 // Force dynamic rendering for Cloudflare Pages
 export const dynamic = 'force-dynamic';
@@ -45,19 +45,21 @@ export async function POST(
       );
     }
 
-    // Step 1: Refresh metrics for all approved submissions
-    console.log(`Refreshing metrics for campaign ${params.id}...`);
-    const metricsRefresh = await refreshCampaignMetrics(params.id);
-    console.log(`Metrics refresh completed: ${metricsRefresh.updated} updated, ${metricsRefresh.failed} failed`);
+    // Lock campaign if not already locked
+    if (!campaign.lockedAt) {
+      await prisma.campaign.update({
+        where: { id: params.id },
+        data: { lockedAt: new Date() },
+      });
+    }
 
-    // Step 2: Calculate and distribute payouts
-    console.log(`Calculating payouts for campaign ${params.id}...`);
+    // Process final distribution (insurance → eligibility → Robin Hood → wallet payouts)
+    console.log(`Processing final distribution for campaign ${params.id}...`);
     const payoutResult = await calculateCampaignPayouts(params.id);
 
     return NextResponse.json({
       success: true,
       message: "Campaign finished successfully",
-      metricsRefresh,
       payout: payoutResult,
     });
   } catch (error: any) {

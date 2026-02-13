@@ -42,16 +42,18 @@ export async function POST(
       );
     }
 
-    // Timer starts from approval - set startDate and endDate
+    // Timer starts from approval - use desiredStartDate if in future, else start now
     const now = new Date();
-    const endDate = new Date(now.getTime() + campaign.durationDays * 24 * 60 * 60 * 1000);
+    const desiredStart = campaign.desiredStartDate ? new Date(campaign.desiredStartDate) : now;
+    const actualStart = desiredStart > now ? desiredStart : now;
+    const endDate = new Date(actualStart.getTime() + campaign.durationDays * 24 * 60 * 60 * 1000);
 
     // Approve the campaign with dates
     const updatedCampaign = await prisma.campaign.update({
       where: { id: params.id },
       data: {
         status: "ACTIVE",
-        startDate: now,
+        startDate: actualStart,
         endDate: endDate,
       },
       include: {

@@ -305,21 +305,13 @@ export default async function AdminCampaignDetailPage({
            </Card>
         )}
 
-        {campaign.status === "PENDING_APPROVAL" ? (
-          <CampaignApprovalSection
-            campaignId={campaign.id}
-            totalBudget={Number(campaign.totalBudget)}
-            commissionPercent={commissionPercent}
-            status={campaign.status}
-          />
-        ) : (
-           <CampaignApprovalSection
-            campaignId={campaign.id}
-            totalBudget={Number(campaign.totalBudget)}
-            commissionPercent={commissionPercent}
-            status={campaign.status}
-          />
-        )}
+        <CampaignApprovalSection
+          campaignId={campaign.id}
+          totalBudget={Number(campaign.totalBudget)}
+          commissionPercent={commissionPercent}
+          status={campaign.status}
+          desiredStartDate={campaign.desiredStartDate?.toISOString() ?? null}
+        />
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">

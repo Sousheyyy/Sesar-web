@@ -24,7 +24,15 @@ export async function POST(
       );
     }
 
-    const { reason } = await req.json();
+    const body = await req.json();
+    const reason = body?.reason;
+
+    if (!reason || typeof reason !== "string" || reason.trim().length === 0) {
+      return NextResponse.json(
+        { error: "Rejection reason is required" },
+        { status: 400 }
+      );
+    }
 
     const campaign = await prisma.campaign.findUnique({
       where: { id: params.id },
@@ -46,11 +54,12 @@ export async function POST(
 
     // Reject campaign and refund the budget to artist
     await prisma.$transaction(async (tx) => {
-      // Update campaign status
+      // Update campaign status with rejection reason
       await tx.campaign.update({
         where: { id: params.id },
         data: {
           status: "CANCELLED",
+          rejectionReason: reason.trim(),
         },
       });
 

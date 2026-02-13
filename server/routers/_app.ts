@@ -226,6 +226,7 @@ export const appRouter = t.router({
           durationDays: true,
           commissionPercent: true,
           minVideoDuration: true,
+          lockedAt: true,
           song: {
             select: {
               id: true,
@@ -290,6 +291,7 @@ export const appRouter = t.router({
           endDate: true,
           durationDays: true,
           commissionPercent: true,
+          lockedAt: true,
           submissions: {
             where: { creatorId: userId },
             select: {
@@ -319,7 +321,8 @@ export const appRouter = t.router({
             select: {
               totalCampaignPoints: true,
               totalSubmissions: true,
-              averagePoints: true
+              averagePoints: true,
+              lastBatchAt: true,
             }
           },
           _count: { select: { submissions: true } }
@@ -498,12 +501,33 @@ export const appRouter = t.router({
         });
       }
 
+      // Fetch pool stats for approximate earnings
+      const poolStats = await prisma.campaignPoolStats.findUnique({
+        where: { campaignId: input.id }
+      });
+
+      // Calculate approximate earnings for my submission
+      let mySubmissionWithEarnings = mySubmission;
+      if (mySubmission && poolStats) {
+        const { CalculationService } = await import('@/server/services/calculationService');
+        const approx = CalculationService.calculateApproximateEarnings(
+          { totalPoints: mySubmission.totalPoints, estimatedEarnings: mySubmission.estimatedEarnings, sharePercent: mySubmission.sharePercent },
+          { lastBatchTotalPoints: poolStats.lastBatchTotalPoints, lastBatchAt: poolStats.lastBatchAt, totalCampaignPoints },
+          { totalBudget: campaign.totalBudget, commissionPercent: campaign.commissionPercent }
+        );
+        mySubmissionWithEarnings = { ...mySubmission, earnings: approx } as any;
+      }
+
       // Destructure to exclude stale computed fields from database
       const { totalCampaignPoints: _, netBudgetTP: __, netMultiplier: ___, ...campaignData } = campaign;
 
       return {
         ...campaignData,
-        mySubmission,
+        mySubmission: mySubmissionWithEarnings,
+        poolStats: poolStats ? {
+          lastBatchAt: poolStats.lastBatchAt,
+          totalSubmissions: poolStats.totalSubmissions,
+        } : null,
         // Always use fresh computed values, not stale database fields
         totalViews,
         totalCampaignPoints,
@@ -774,35 +798,7 @@ export const appRouter = t.router({
       }
 
       const mySubmission = campaign.submissions[0];
-      let finalSubmission = mySubmission;
-
-      // Smart Refresh: Check if stale (> 6 hours)
-      const now = new Date();
-      const lastChecked = mySubmission.lastCheckedAt ? new Date(mySubmission.lastCheckedAt) : new Date(0);
-      const diffHours = (now.getTime() - lastChecked.getTime()) / (1000 * 60 * 60);
-
-      if (diffHours > 6) {
-        try {
-          if (mySubmission.tiktokUrl) {
-            const contentData = await fetchVideoViaInsightIQ(mySubmission.tiktokUrl);
-            const engagement = contentData.engagement || {};
-
-            finalSubmission = await prisma.submission.update({
-              where: { id: mySubmission.id },
-              data: {
-                lastViewCount: engagement.view_count || engagement.views || 0,
-                lastLikeCount: engagement.like_count || engagement.likes || 0,
-                lastCommentCount: engagement.comment_count || engagement.comments || 0,
-                lastShareCount: engagement.share_count || engagement.shares || 0,
-                lastCheckedAt: new Date()
-              }
-            });
-          }
-        } catch (error) {
-          console.error("Smart Refresh Failed:", error);
-          // Fail silently and show old data
-        }
-      }
+      const finalSubmission = mySubmission;
 
       // Live Aggregation
       const aggregations = await prisma.submission.aggregate({
@@ -819,13 +815,31 @@ export const appRouter = t.router({
       const totalShares = aggregations._sum.lastShareCount || 0;
       const totalCampaignPoints = (totalViews * 0.01) + (totalLikes * 0.5) + (totalShares * 1.0);
 
+      // Fetch pool stats for approximate earnings
+      const campaignPoolStats = await prisma.campaignPoolStats.findUnique({
+        where: { campaignId: input.id }
+      });
+
+      // Calculate approximate earnings
+      let approximateEarnings: import('@/server/services/calculationService').ApproximateEarnings | null = null;
+      if (campaignPoolStats && finalSubmission) {
+        const { CalculationService } = await import('@/server/services/calculationService');
+        approximateEarnings = CalculationService.calculateApproximateEarnings(
+          { totalPoints: finalSubmission.totalPoints, estimatedEarnings: finalSubmission.estimatedEarnings, sharePercent: finalSubmission.sharePercent },
+          { lastBatchTotalPoints: campaignPoolStats.lastBatchTotalPoints, lastBatchAt: campaignPoolStats.lastBatchAt, totalCampaignPoints },
+          { totalBudget: campaign.totalBudget, commissionPercent: campaign.commissionPercent }
+        );
+      }
+
       return {
-        campaign,
+        campaign: { ...campaign, lockedAt: campaign.lockedAt },
         submission: finalSubmission,
+        approximateEarnings,
         poolStats: {
           totalCampaignPoints,
           totalViews,
-          totalLikes
+          totalLikes,
+          lastBatchAt: campaignPoolStats?.lastBatchAt || null,
         }
       };
     }),
@@ -1002,6 +1016,18 @@ export const appRouter = t.router({
       if (!campaign) throw new Error("CAMPAIGN_NOT_FOUND");
       if (campaign.status !== "ACTIVE") throw new Error("CAMPAIGN_NOT_ACTIVE");
 
+      // v2: Check campaign timing
+      const now = new Date();
+      if (campaign.startDate && campaign.startDate > now) {
+        throw new Error("CAMPAIGN_NOT_STARTED"); // Campaign approved but not yet open
+      }
+      if (campaign.endDate && campaign.endDate <= now) {
+        throw new Error("CAMPAIGN_ENDED");
+      }
+      if (campaign.lockedAt) {
+        throw new Error("CAMPAIGN_LOCKED"); // Locked for final distribution
+      }
+
       // 1. Get user's InsightIQ account for video verification
       const fullUser = await prisma.user.findUnique({
         where: { id: userId },
@@ -1021,26 +1047,39 @@ export const appRouter = t.router({
 
       const engagement = contentData.engagement || {};
 
-      // 3. Create Submission
+      // 3. Calculate initial points
+      const { CalculationService } = await import('@/server/services/calculationService');
+      const views = engagement.view_count || engagement.views || 0;
+      const likes = engagement.like_count || engagement.likes || 0;
+      const shares = engagement.share_count || engagement.shares || 0;
+      const comments = engagement.comment_count || engagement.comments || 0;
+      const points = CalculationService.calculatePoints(views, likes, shares);
+
+      // 4. Create Submission with points and insightiqContentId
       const submission = await prisma.submission.create({
         data: {
           campaignId: input.campaignId,
           creatorId: userId,
           tiktokUrl: input.tiktokUrl,
           tiktokVideoId: contentData.platform_content_id || contentData.id || '',
+          insightiqContentId: contentData.id || null, // InsightIQ internal UUID for webhook matching
           status: "APPROVED",
-          lastViewCount: engagement.view_count || engagement.views || 0,
-          lastLikeCount: engagement.like_count || engagement.likes || 0,
-          lastCommentCount: engagement.comment_count || engagement.comments || 0,
-          lastShareCount: engagement.share_count || engagement.shares || 0,
+          lastViewCount: views,
+          lastLikeCount: likes,
+          lastCommentCount: comments,
+          lastShareCount: shares,
+          viewPoints: points.viewPoints,
+          likePoints: points.likePoints,
+          sharePoints: points.sharePoints,
+          totalPoints: points.totalPoints,
           videoDuration: contentData.duration || 0,
-          lastCheckedAt: new Date()
+          lastCheckedAt: new Date(),
+          // sharePercent and estimatedEarnings stay 0 — updated at batch time
         },
       });
 
-      // 4. Trigger backend calculations immediately
-      const { onSubmissionStatsUpdate } = await import('@/server/services/submissionHooks');
-      await onSubmissionStatsUpdate(submission.id, prisma);
+      // 5. Update campaign aggregate totals only (NO full Robin Hood recalc)
+      await CalculationService.updateCampaignTotalPoints(input.campaignId, prisma);
 
       return { success: true, submissionId: submission.id };
     }),
@@ -1092,13 +1131,21 @@ export const appRouter = t.router({
       tiktokUrl: z.string().url(),
       title: z.string().min(1),
       description: z.string().optional(),
-      budget: z.number().min(200000).max(10000000), // 20,000 - 1,000,000 TL (in TP)
+      budget: z.number().min(20000).max(1000000), // TL
       minVideoDuration: z.number().optional(),
+      desiredStartDate: z.string().datetime(), // ISO date string, min 3 days from now
     }))
     .mutation(async ({ input, ctx }) => {
       const userId = ctx.user?.id;
       if (!userId) {
         throw new Error("UNAUTHORIZED");
+      }
+
+      // Validate desiredStartDate is at least 3 days from now
+      const desiredStart = new Date(input.desiredStartDate);
+      const minStartDate = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000); // now + 72 hours
+      if (desiredStart < minStartDate) {
+        throw new Error("START_DATE_TOO_EARLY"); // Must be at least 3 days from now
       }
 
       // Import tier utilities
@@ -1153,8 +1200,7 @@ export const appRouter = t.router({
       }
 
       // 3. Calculate tier-based values
-      const budgetTP = input.budget;
-      const budgetTL = budgetTP / 10; // 10 TP = 1 TL Conversion
+      const budgetTL = input.budget;
 
       // Calculate campaign tier and auto-set duration/commission
       const campaignTier = getCampaignTierFromBudget(budgetTL);
@@ -1203,6 +1249,7 @@ export const appRouter = t.router({
             minVideoDuration: input.minVideoDuration,
             durationDays: durationDays, // Auto-calculated from tier
             commissionPercent: commissionPercent, // Auto-calculated from tier
+            desiredStartDate: desiredStart, // Artist's chosen start date
             startDate: null, // Set on admin approval
             endDate: null, // Set as startDate + durationDays on approval
           }
@@ -1252,8 +1299,11 @@ export const appRouter = t.router({
           totalBudget: true,
           startDate: true,
           endDate: true,
+          desiredStartDate: true,
           durationDays: true,
           commissionPercent: true,
+          lockedAt: true,
+          rejectionReason: true,
           artistId: true,
           song: {
             select: {
@@ -1267,7 +1317,8 @@ export const appRouter = t.router({
             select: {
               totalCampaignPoints: true,
               totalSubmissions: true,
-              averagePoints: true
+              averagePoints: true,
+              lastBatchAt: true,
             }
           },
           _count: { select: { submissions: true } }
@@ -1322,7 +1373,8 @@ export const appRouter = t.router({
               endDate: true,
               song: {
                 select: {
-                  title: true
+                  title: true,
+                  coverImage: true
                 }
               }
             }
@@ -1403,7 +1455,7 @@ export const appRouter = t.router({
         ...finishedSubmissions.map(s => ({
           id: s.id,
           type: 'CAMPAIGN',
-          amount: (Number(s.estimatedEarnings) || 0) * 10, // Convert Decimal to Number, then TL to TP
+          amount: Number(s.estimatedEarnings) || 0,
           date: s.updatedAt, // Use updatedAt for when it was finalized
           description: `${s.campaign?.song?.title || 'Kampanya'} - Kazanç`,
           status: 'COMPLETED',
@@ -1413,7 +1465,7 @@ export const appRouter = t.router({
         ...recentTransactions.map(t => ({
           id: t.id,
           type: t.type,
-          amount: Number(t.amount) * 10, // TL to TP
+          amount: Number(t.amount),
           date: t.createdAt,
           description: t.description || 'Ödeme',
           status: t.status,
@@ -1589,7 +1641,7 @@ export const appRouter = t.router({
       return { success: true, user: updatedUser };
     }),
 
-  upgradeToProWithTP: t.procedure
+  upgradeToProWithBalance: t.procedure
     .mutation(async ({ ctx }) => {
       const userId = ctx.user?.id;
       if (!userId) throw new Error("UNAUTHORIZED");
@@ -1597,7 +1649,7 @@ export const appRouter = t.router({
       const user = await prisma.user.findUnique({ where: { id: userId } });
       if (!user) throw new Error("USER_NOT_FOUND");
 
-      // 1 TL = 10 TP. Price is 3000 TP => 300 TL.
+      // Price: 300 TL
       const COST_TL = 300;
       const COUPON_REWARD = 20; // Grant 20 coupons with each subscription
 
@@ -1640,7 +1692,7 @@ export const appRouter = t.router({
       const userId = ctx.user?.id;
       if (!userId) throw new Error("UNAUTHORIZED");
 
-      const COST_PER_COUPON = 100; // 100 TP per coupon
+      const COST_PER_COUPON = 100; // 100 TL per coupon
       const totalCost = input.amount * COST_PER_COUPON;
 
       const user = await prisma.user.findUnique({ where: { id: userId } });
@@ -2220,154 +2272,11 @@ export const appRouter = t.router({
       });
     }),
 
-  completeCampaign: t.procedure
-    .input(z.object({ campaignId: z.string() }))
-    .mutation(async ({ input, ctx }) => {
-      // 1. Authorization
-      const userId = ctx.user?.id;
-      if (!userId) throw new Error("UNAUTHORIZED");
-
-      const campaign = await prisma.campaign.findUnique({
-        where: { id: input.campaignId },
-        include: { submissions: { where: { status: { not: 'REJECTED' } } } }
-      });
-
-      if (!campaign) throw new Error("CAMPAIGN_NOT_FOUND");
-      if (campaign.artistId !== userId && ctx.user?.role !== "ADMIN") throw new Error("FORBIDDEN");
-      if (campaign.status === "COMPLETED") throw new Error("CAMPAIGN_ALREADY_COMPLETED");
-
-      // 2. Refresh Metrics via InsightIQ (outside transaction - can fail gracefully)
-      const subsWithCreator = await prisma.submission.findMany({
-        where: { campaignId: input.campaignId, status: { not: 'REJECTED' } },
-      });
-
-      const CHUNK_SIZE = 5;
-      const refreshedMetrics: { id: string; views: number; likes: number; comments: number; shares: number }[] = [];
-
-      for (let i = 0; i < subsWithCreator.length; i += CHUNK_SIZE) {
-        const chunk = subsWithCreator.slice(i, i + CHUNK_SIZE);
-        await Promise.all(chunk.map(async (sub) => {
-          try {
-            if (sub.tiktokUrl) {
-              const contentData = await fetchVideoViaInsightIQ(sub.tiktokUrl);
-              const engagement = contentData.engagement || {};
-              refreshedMetrics.push({
-                id: sub.id,
-                views: engagement.view_count || engagement.views || 0,
-                likes: engagement.like_count || engagement.likes || 0,
-                comments: engagement.comment_count || engagement.comments || 0,
-                shares: engagement.share_count || engagement.shares || 0
-              });
-            } else {
-              // No TikTok URL, use existing metrics
-              refreshedMetrics.push({
-                id: sub.id,
-                views: sub.lastViewCount || 0,
-                likes: sub.lastLikeCount || 0,
-                comments: sub.lastCommentCount || 0,
-                shares: sub.lastShareCount || 0
-              });
-            }
-          } catch (e) {
-            console.error(`Failed to refresh submission ${sub.id}:`, e);
-            // Use old metrics if refresh fails
-            refreshedMetrics.push({
-              id: sub.id,
-              views: sub.lastViewCount || 0,
-              likes: sub.lastLikeCount || 0,
-              comments: sub.lastCommentCount || 0,
-              shares: sub.lastShareCount || 0
-            });
-          }
-        }));
-      }
-
-      // 3. ALL calculations and payouts in ONE atomic transaction
-      const { CalculationService } = await import('@/server/services/calculationService');
-
-      await prisma.$transaction(async (tx) => {
-        // 3a. Update metrics and calculate points for all submissions
-        for (const metrics of refreshedMetrics) {
-          const points = CalculationService.calculatePoints(
-            metrics.views,
-            metrics.likes,
-            metrics.shares
-          );
-
-          await tx.submission.update({
-            where: { id: metrics.id },
-            data: {
-              lastViewCount: metrics.views,
-              lastLikeCount: metrics.likes,
-              lastCommentCount: metrics.comments,
-              lastShareCount: metrics.shares,
-              lastCheckedAt: new Date(),
-              viewPoints: points.viewPoints,
-              likePoints: points.likePoints,
-              sharePoints: points.sharePoints,
-              totalPoints: points.totalPoints
-            }
-          });
-        }
-
-        // 3b. Recalculate campaign totals and distribution (with Robin Hood cap)
-        await CalculationService.updateCampaignTotalPoints(input.campaignId, prisma, tx);
-        await CalculationService.recalculateCampaignSubmissions(input.campaignId, prisma, tx);
-
-        // 3c. Distribute payouts to creators
-        const finalSubmissions = await tx.submission.findMany({
-          where: {
-            campaignId: input.campaignId,
-            status: 'APPROVED',
-            totalEarnings: { gt: 0 }
-          },
-          select: {
-            id: true,
-            creatorId: true,
-            totalEarnings: true
-          }
-        });
-
-        for (const sub of finalSubmissions) {
-          const earningsTL = Number(sub.totalEarnings);
-          if (earningsTL > 0) {
-            // Update creator balance
-            await tx.user.update({
-              where: { id: sub.creatorId },
-              data: { balance: { increment: earningsTL } }
-            });
-
-            // Create earnings transaction record
-            await tx.transaction.create({
-              data: {
-                userId: sub.creatorId,
-                type: 'EARNING',
-                amount: earningsTL,
-                status: 'COMPLETED',
-                description: `Kampanya Kazancı: ${campaign.title}`,
-                reference: sub.id
-              }
-            });
-          }
-        }
-
-        // 3d. Mark campaign as completed
-        await tx.campaign.update({
-          where: { id: input.campaignId },
-          data: {
-            status: "COMPLETED",
-            completedAt: new Date()
-          }
-        });
-      }, {
-        timeout: 60000 // 60 second timeout for large campaigns
-      });
-
-      return { success: true };
-    }),
-
   rejectCampaign: t.procedure
-    .input(z.object({ campaignId: z.string(), reason: z.string().optional() }))
+    .input(z.object({
+      campaignId: z.string(),
+      reason: z.string().min(1, "Rejection reason is required"),
+    }))
     .mutation(async ({ input, ctx }) => {
       const userId = ctx.user?.id;
       if (!userId) throw new Error("UNAUTHORIZED");
@@ -2380,14 +2289,18 @@ export const appRouter = t.router({
       });
 
       if (!campaign) throw new Error("CAMPAIGN_NOT_FOUND");
+      if (campaign.status !== "PENDING_APPROVAL") throw new Error("CAMPAIGN_NOT_PENDING");
 
+      // 100% refund on admin rejection
       const refundAmountTL = Number(campaign.totalBudget);
 
-      // Refund & Reject
       await prisma.$transaction(async (tx) => {
         await tx.campaign.update({
           where: { id: input.campaignId },
-          data: { status: "REJECTED" }
+          data: {
+            status: "REJECTED",
+            rejectionReason: input.reason,
+          }
         });
 
         await tx.user.update({
@@ -2401,12 +2314,141 @@ export const appRouter = t.router({
             type: "DEPOSIT",
             amount: refundAmountTL,
             status: "COMPLETED",
-            description: `Kampanya İadesi: ${campaign.title} (${input.reason || 'Admin Reddi'})`
+            description: `Kampanya İadesi (Reddedildi): ${campaign.title}`
           }
         });
       });
 
       return { success: true };
+    }),
+
+  // ─── Campaign Approval ───────────────────────────────────────────────
+  approveCampaign: t.procedure
+    .input(z.object({ campaignId: z.string() }))
+    .mutation(async ({ input, ctx }) => {
+      const userId = ctx.user?.id;
+      if (!userId) throw new Error("UNAUTHORIZED");
+
+      const admin = await prisma.user.findUnique({ where: { id: userId } });
+      if (admin?.role !== "ADMIN") throw new Error("FORBIDDEN");
+
+      const campaign = await prisma.campaign.findUnique({
+        where: { id: input.campaignId }
+      });
+
+      if (!campaign) throw new Error("CAMPAIGN_NOT_FOUND");
+      if (campaign.status !== "PENDING_APPROVAL") throw new Error("CAMPAIGN_NOT_PENDING");
+
+      const now = new Date();
+      const actualStartDate = campaign.desiredStartDate && campaign.desiredStartDate > now
+        ? campaign.desiredStartDate
+        : now;
+
+      const endDate = new Date(actualStartDate.getTime() + campaign.durationDays * 24 * 60 * 60 * 1000);
+
+      await prisma.campaign.update({
+        where: { id: input.campaignId },
+        data: {
+          status: "ACTIVE",
+          startDate: actualStartDate,
+          endDate: endDate,
+        }
+      });
+
+      // Initialize campaign calculations
+      const { onCampaignCreated } = await import('@/server/services/submissionHooks');
+      await onCampaignCreated(input.campaignId, prisma);
+
+      return { success: true, startDate: actualStartDate, endDate };
+    }),
+
+  // ─── Edit Pending Campaign (Artist) ──────────────────────────────────
+  editPendingCampaign: t.procedure
+    .input(z.object({
+      campaignId: z.string(),
+      title: z.string().min(1).max(100).optional(),
+      description: z.string().max(2000).optional(),
+      desiredStartDate: z.string().datetime().optional(),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      const userId = ctx.user?.id;
+      if (!userId) throw new Error("UNAUTHORIZED");
+
+      const campaign = await prisma.campaign.findUnique({
+        where: { id: input.campaignId }
+      });
+
+      if (!campaign) throw new Error("CAMPAIGN_NOT_FOUND");
+      if (campaign.artistId !== userId) throw new Error("FORBIDDEN");
+      if (campaign.status !== "PENDING_APPROVAL") throw new Error("CAMPAIGN_NOT_PENDING");
+
+      const updateData: any = {};
+
+      if (input.title !== undefined) updateData.title = input.title;
+      if (input.description !== undefined) updateData.description = input.description;
+
+      if (input.desiredStartDate !== undefined) {
+        const newDate = new Date(input.desiredStartDate);
+        const minStartDate = new Date(campaign.createdAt.getTime() + 3 * 24 * 60 * 60 * 1000);
+        if (newDate < minStartDate) {
+          throw new Error("START_DATE_TOO_EARLY");
+        }
+        updateData.desiredStartDate = newDate;
+      }
+
+      if (Object.keys(updateData).length === 0) {
+        throw new Error("NO_CHANGES");
+      }
+
+      await prisma.campaign.update({
+        where: { id: input.campaignId },
+        data: updateData,
+      });
+
+      return { success: true };
+    }),
+
+  // ─── Cancel Campaign (Artist) ────────────────────────────────────────
+  cancelCampaign: t.procedure
+    .input(z.object({ campaignId: z.string() }))
+    .mutation(async ({ input, ctx }) => {
+      const userId = ctx.user?.id;
+      if (!userId) throw new Error("UNAUTHORIZED");
+
+      const campaign = await prisma.campaign.findUnique({
+        where: { id: input.campaignId }
+      });
+
+      if (!campaign) throw new Error("CAMPAIGN_NOT_FOUND");
+      if (campaign.artistId !== userId) throw new Error("FORBIDDEN");
+      if (campaign.status !== "PENDING_APPROVAL") throw new Error("CAMPAIGN_NOT_PENDING");
+
+      // 100% refund on artist self-cancel
+      const refundAmountTL = Number(campaign.totalBudget);
+
+      await prisma.$transaction(async (tx) => {
+        await tx.campaign.update({
+          where: { id: input.campaignId },
+          data: { status: "CANCELLED" }
+        });
+
+        await tx.user.update({
+          where: { id: userId },
+          data: { balance: { increment: refundAmountTL } }
+        });
+
+        await tx.transaction.create({
+          data: {
+            userId,
+            type: "DEPOSIT",
+            amount: refundAmountTL,
+            status: "COMPLETED",
+            description: `Kampanya İptali: ${campaign.title}`
+          }
+        });
+      });
+
+      return { success: true, refundAmount: refundAmountTL };
     }),
 
   // ─── InsightIQ (Phyllo) Integration ───────────────────────────────────

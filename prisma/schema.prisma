@@ -108,18 +108,21 @@ model User {
   couponBalance Int       @default(0)
   usages        MarketplaceUsage[]
   
+  // InsightIQ session status
+  insightiqSessionExpired Boolean @default(false) // Set true when SESSION.EXPIRED webhook received
+
   // Metadata
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
   lastLoginAt   DateTime?
-  
+
   // Relations
   songs         Song[]
   campaigns     Campaign[]
   submissions   Submission[]
   transactions  Transaction[]
   notifications Notification[]
-  
+
   @@index([email])
   @@index([role])
   @@index([creatorTier])
@@ -196,15 +199,22 @@ model Campaign {
   endDate         DateTime?      // Auto-calculated: startDate + durationDays
   completedAt     DateTime?
 
+  // v2: Scheduling & approval
+  desiredStartDate DateTime?     // Artist's chosen start date (min createdAt + 3 days)
+  rejectionReason  String?       @db.Text // Admin's reason for rejection
+  lockedAt         DateTime?     // When submissions were locked (23:00 on end day)
+  insuranceTriggered Boolean     @default(false) // Whether insurance refund was applied
+
   // Computed fields for backend calculations
   totalCampaignPoints Float        @default(0)  // Sum of all submission points
-  netBudgetTP         Float        @default(0)  // Budget after commission in TP
+  netBudgetTP         Float        @default(0)  // DEPRECATED - no longer used
   netMultiplier       Float        @default(0)  // (100 - commissionPercent) / 100
-  
+
   // Relations
   submissions     Submission[]
   poolStats       CampaignPoolStats?
-  
+  metricFetchLogs MetricFetchLog[]
+
   @@index([songId])
   @@index([artistId])
   @@index([status])
@@ -214,6 +224,7 @@ model Campaign {
   @@index([payoutStatus])
   @@index([tier])
   @@index([status, endDate]) // For filtering active/completed campaigns
+  @@index([status, endDate, lockedAt]) // For pre-distribute and distribute crons
   @@index([artistId, createdAt(sort: Desc)]) // For getMyCampaigns optimization
   @@index([title]) // For search optimization
 }
@@ -226,8 +237,9 @@ model Submission {
   creatorId       String
   
   // TikTok video info
-  tiktokUrl       String
-  tiktokVideoId   String?
+  tiktokUrl          String
+  tiktokVideoId      String?
+  insightiqContentId String?    // InsightIQ internal content UUID (for webhook matching)
   
   // Verification data
   verified        Boolean          @default(false)
@@ -275,23 +287,46 @@ model Submission {
   @@index([campaignId, creatorId]) // For joined campaigns optimization
   @@index([creatorId, createdAt(sort: Desc)]) // For user submission history
   @@index([creatorId, status]) // For active video counts and status filtering
+  @@index([insightiqContentId]) // For webhook matching
 }
 
 model CampaignPoolStats {
   id                    String   @id @default(cuid())
   campaign              Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
   campaignId            String   @unique
-  
+
   // Aggregated statistics
   totalCampaignPoints   Float    @default(0)  // Sum of all approved submission points
   totalSubmissions      Int      @default(0)  // Count of approved submissions
   averagePoints         Float    @default(0)  // Average points per submission
-  
+
+  // v2: Batch tracking
+  lastBatchAt           DateTime?             // When last batch recalculation ran
+  lastBatchTotalPoints  Float    @default(0)  // Total points snapshot from last batch
+
   // Timestamps
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
-  
+
   @@index([campaignId])
+}
+
+model MetricFetchLog {
+  id              String   @id @default(cuid())
+  campaign        Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  campaignId      String
+  submissionId    String?            // null if campaign-level log
+  source          String             // "WEBHOOK" | "ON_DEMAND" | "SUBMISSION" | "FINAL"
+  status          String             // "SUCCESS" | "FAILED" | "SKIPPED" | "INSURANCE_TRIGGERED"
+  errorMessage    String?  @db.Text
+  metricsSnapshot Json?              // { views, likes, shares, points } at time of fetch
+  webhookEventId  String?            // InsightIQ webhook id for idempotency
+
+  createdAt       DateTime @default(now())
+
+  @@index([campaignId])
+  @@index([webhookEventId])
+  @@index([createdAt])
 }
 
 model Transaction {

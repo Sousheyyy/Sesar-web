@@ -64,8 +64,6 @@ export async function POST(req: NextRequest) {
 
     const durationDays = getDurationForTier(tier);
     const commissionPercent = getCommissionForTier(tier);
-    const netMultiplier = (100 - commissionPercent) / 100;
-    const netBudgetTP = totalBudget * 10 * netMultiplier;
 
     // Check if user has sufficient balance
     const user = await prisma.user.findUnique({
@@ -124,8 +122,6 @@ export async function POST(req: NextRequest) {
           tier: tier as any,
           durationDays,
           commissionPercent,
-          netMultiplier,
-          netBudgetTP,
         },
         include: {
           song: true,
