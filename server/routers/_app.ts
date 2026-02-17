@@ -4,7 +4,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { Context } from "../context";
-import { getCampaignTierFromBudget, getDurationForTier, getCommissionForTier } from "../lib/tierUtils";
+import { getCommissionFromBudget, MIN_DURATION_DAYS, MAX_DURATION_DAYS } from "../lib/tierUtils";
 import { uploadImageFromUrl, STORAGE_BUCKETS } from "@/lib/supabase/storage";
 
 // ─── InsightIQ (formerly Phyllo) helpers ───────────────────────
@@ -183,12 +183,10 @@ export const appRouter = t.router({
   getActiveCampaigns: t.procedure
     .input(z.object({
       search: z.string().optional(),
-      tier: z.enum(['C', 'B', 'A', 'S']).optional(),
       limit: z.number().optional().default(100)
     }).optional())
     .query(async ({ input }) => {
       const search = input?.search;
-      const tier = input?.tier;
       const limit = input?.limit || 100;
 
       const where: any = {
@@ -208,11 +206,6 @@ export const appRouter = t.router({
         ];
       }
 
-      // Tier filter
-      if (tier) {
-        where.tier = tier;
-      }
-
       const campaigns = await prisma.campaign.findMany({
         where,
         take: limit,
@@ -220,7 +213,6 @@ export const appRouter = t.router({
           id: true,
           title: true,
           status: true,
-          tier: true,
           totalBudget: true,
           endDate: true,
           durationDays: true,
@@ -1132,6 +1124,7 @@ export const appRouter = t.router({
       title: z.string().min(1),
       description: z.string().optional(),
       budget: z.number().min(20000).max(1000000), // TL
+      durationDays: z.number().min(5).max(30), // User-selected duration
       minVideoDuration: z.number().optional(),
       desiredStartDate: z.string().datetime(), // ISO date string, min 3 days from now
     }))
@@ -1148,8 +1141,8 @@ export const appRouter = t.router({
         throw new Error("START_DATE_TOO_EARLY"); // Must be at least 3 days from now
       }
 
-      // Import tier utilities
-      const { getCampaignTierFromBudget: getTier, getDurationForTier: getDuration, getCommissionForTier: getCommission } =
+      // Import budget utilities
+      const { getCommissionFromBudget } =
         await import("@/server/lib/tierUtils");
 
       // 1. Extract song metadata from TikTok via Apify
@@ -1199,14 +1192,13 @@ export const appRouter = t.router({
         }
       }
 
-      // 3. Calculate tier-based values
+      // 3. Calculate budget-based values
       const budgetTL = input.budget;
+      const durationDays = input.durationDays;
 
-      // Calculate campaign tier and auto-set duration/commission
-      const campaignTier = getCampaignTierFromBudget(budgetTL);
-      if (!campaignTier) throw new Error("INVALID_BUDGET");
-      const durationDays = getDurationForTier(campaignTier);
-      const commissionPercent = getCommissionForTier(campaignTier);
+      // Calculate commission from budget bracket
+      const commissionPercent = getCommissionFromBudget(budgetTL);
+      if (commissionPercent === null) throw new Error("INVALID_BUDGET");
 
       // 4. Deduction & Creation (Transaction)
       const campaign = await prisma.$transaction(async (tx) => {
@@ -1235,23 +1227,22 @@ export const appRouter = t.router({
           }
         });
 
-        // Create Campaign with tier (dates set on admin approval)
+        // Create Campaign (dates set on admin approval)
         return await tx.campaign.create({
           data: {
             title: input.title,
             description: input.description,
-            totalBudget: budgetTL, // Store as TL
+            totalBudget: budgetTL,
             remainingBudget: budgetTL,
-            status: "PENDING_APPROVAL", // Require admin approval
-            tier: campaignTier, // Auto-calculated tier
+            status: "PENDING_APPROVAL",
             songId: song.id,
             artistId: userId,
             minVideoDuration: input.minVideoDuration,
-            durationDays: durationDays, // Auto-calculated from tier
-            commissionPercent: commissionPercent, // Auto-calculated from tier
-            desiredStartDate: desiredStart, // Artist's chosen start date
-            startDate: null, // Set on admin approval
-            endDate: null, // Set as startDate + durationDays on approval
+            durationDays: durationDays,
+            commissionPercent: commissionPercent,
+            desiredStartDate: desiredStart,
+            startDate: null,
+            endDate: null,
           }
         });
       });
@@ -2575,21 +2566,58 @@ export const appRouter = t.router({
 
       const authHeader = `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`;
 
-      // Fetch account from InsightIQ
-      const accountRes = await fetch(`${INSIGHTIQ_BASE_URL}/v1/accounts/${input.accountId}`, {
-        headers: {
-          Authorization: authHeader,
-          "Content-Type": "application/json",
-        },
-      });
+      // Fetch account from InsightIQ with retries (profile data may not be
+      // available immediately after connect — InsightIQ fetches it async)
+      const MAX_AVATAR_RETRIES = 3;
+      const RETRY_DELAY_MS = 2000;
+      let account: any;
+      let avatar: string | null = null;
 
-      if (!accountRes.ok) {
-        console.error("InsightIQ account fetch failed:", await accountRes.text());
-        throw new Error("Failed to fetch InsightIQ account");
+      for (let attempt = 0; attempt <= MAX_AVATAR_RETRIES; attempt++) {
+        const accountRes = await fetch(`${INSIGHTIQ_BASE_URL}/v1/accounts/${input.accountId}`, {
+          headers: {
+            Authorization: authHeader,
+            "Content-Type": "application/json",
+          },
+        });
+
+        if (!accountRes.ok) {
+          console.error("InsightIQ account fetch failed:", await accountRes.text());
+          throw new Error("Failed to fetch InsightIQ account");
+        }
+
+        account = await accountRes.json();
+        console.log(`InsightIQ account data (attempt ${attempt + 1}):`, JSON.stringify(account, null, 2));
+
+        avatar = account.platform_profile_picture_url || account.profile_pic_url || account.image_url || null;
+        if (avatar) break;
+
+        if (attempt < MAX_AVATAR_RETRIES) {
+          console.log(`[linkInsightIQ] Avatar not available yet, retrying in ${RETRY_DELAY_MS}ms... (attempt ${attempt + 1}/${MAX_AVATAR_RETRIES})`);
+          await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS));
+        }
       }
 
-      const account = await accountRes.json();
-      console.log("InsightIQ account data:", JSON.stringify(account, null, 2));
+      // Fallback: try the social profiles endpoint if avatar still missing
+      if (!avatar) {
+        try {
+          console.log("[linkInsightIQ] Trying profiles API fallback for avatar...");
+          const profileRes = await fetch(
+            `${INSIGHTIQ_BASE_URL}/v1/social/creators/profiles?account_id=${input.accountId}`,
+            { headers: { Authorization: authHeader, "Content-Type": "application/json" } }
+          );
+          if (profileRes.ok) {
+            const profileData = await profileRes.json();
+            const profiles = profileData.data || [];
+            if (profiles.length > 0) {
+              avatar = profiles[0].platform_profile_picture_url || profiles[0].image_url || null;
+              console.log("[linkInsightIQ] Got avatar from profiles fallback:", avatar);
+            }
+          }
+        } catch (e) {
+          console.warn("[linkInsightIQ] Profiles fallback failed:", e);
+        }
+      }
 
       // InsightIQ uses different field names - check all possibilities
       const handle: string | undefined = account.platform_username || account.username;
@@ -2601,7 +2629,6 @@ export const appRouter = t.router({
 
       // Get additional profile data - InsightIQ field names
       const displayName: string = account.platform_profile_name || account.name || handle;
-      const avatar: string | null = account.platform_profile_picture_url || account.profile_pic_url || null;
       console.log("Extracted: handle=", handle, "displayName=", displayName, "avatar=", avatar);
 
       // Update user with TikTok data (using existing schema fields)

@@ -45,13 +45,13 @@ export class CalculationService {
     static readonly MIN_ELIGIBLE_POINTS = 50;
     static readonly MIN_ELIGIBLE_CONTRIBUTION = 0.001; // 0.1%
 
-    // --- Insurance thresholds (must meet ALL THREE for normal distribution) ---
-    static readonly INSURANCE_THRESHOLDS = {
-        C: { minSubmissions: 3, minPoints: 500, minViews: 50_000 },
-        B: { minSubmissions: 5, minPoints: 2_000, minViews: 200_000 },
-        A: { minSubmissions: 8, minPoints: 5_000, minViews: 500_000 },
-        S: { minSubmissions: 15, minPoints: 15_000, minViews: 1_500_000 },
-    } as const;
+    // --- Insurance thresholds by budget bracket (must meet ALL THREE for normal distribution) ---
+    static getInsuranceThresholds(totalBudget: number): { minSubmissions: number; minPoints: number; minViews: number } {
+        if (totalBudget >= 100000) return { minSubmissions: 15, minPoints: 15_000, minViews: 1_500_000 };
+        if (totalBudget >= 70000)  return { minSubmissions: 8,  minPoints: 5_000,  minViews: 500_000 };
+        if (totalBudget >= 40000)  return { minSubmissions: 5,  minPoints: 2_000,  minViews: 200_000 };
+        return { minSubmissions: 3, minPoints: 500, minViews: 50_000 };
+    }
 
     // --- Refund percentages ---
     static readonly INSURANCE_REFUND_PERCENT = 0.95;
@@ -106,16 +106,15 @@ export class CalculationService {
     }
 
     /**
-     * Check insurance thresholds for a campaign tier
+     * Check insurance thresholds based on campaign budget
      */
     static checkInsuranceThresholds(
-        tier: string,
+        totalBudget: number,
         totalSubmissions: number,
         totalPoints: number,
         totalViews: number
     ): InsuranceCheckResult {
-        const thresholds = this.INSURANCE_THRESHOLDS[tier as keyof typeof this.INSURANCE_THRESHOLDS];
-        if (!thresholds) return { passed: false, failedChecks: ['Unknown tier'] };
+        const thresholds = this.getInsuranceThresholds(totalBudget);
 
         const failedChecks: string[] = [];
 
@@ -449,9 +448,9 @@ export class CalculationService {
             // 1. Final point aggregation
             const stats = await this.updateCampaignTotalPoints(campaignId, prisma, tx);
 
-            // 2. Insurance check
+            // 2. Insurance check (budget-based thresholds)
             const insuranceResult = this.checkInsuranceThresholds(
-                campaign.tier,
+                Number(campaign.totalBudget),
                 stats.totalSubmissions,
                 stats.totalCampaignPoints,
                 stats.totalViews

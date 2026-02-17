@@ -176,12 +176,12 @@ model Campaign {
   totalBudget     Decimal        @db.Decimal(10, 2)
   remainingBudget Decimal        @db.Decimal(10, 2)
   
-  // Tier System (based on budget: C: 20-40k, B: 40-70k, A: 70-100k, S: 100k+)
-  tier            Tier           @default(C)
-  durationDays    Int            @default(7)   // Auto-calculated: C=7, B=14, A=21, S=30
+  // Tier (nullable - null for new campaigns, populated for legacy)
+  tier            Tier?
+  durationDays    Int            @default(7)   // User-selected: 5-30 days
 
   // Payout System
-  commissionPercent     Int      @default(20)  // Tier-based: C=20%, B=15%, A=12%, S=10%
+  commissionPercent     Int      @default(20)  // Budget-bracket-based: 20k→20%, 40k→15%, 70k→12%, 100k→10%
   payoutStatus          PayoutStatus @default(PENDING)
 
   // Requirements
@@ -222,7 +222,7 @@ model Campaign {
   @@index([startDate])
   @@index([endDate])
   @@index([payoutStatus])
-  @@index([tier])
+  @@index([durationDays])
   @@index([status, endDate]) // For filtering active/completed campaigns
   @@index([status, endDate, lockedAt]) // For pre-distribute and distribute crons
   @@index([artistId, createdAt(sort: Desc)]) // For getMyCampaigns optimization

@@ -1,79 +1,78 @@
-// Tier calculation utilities for backend
-
-export type Tier = 'C' | 'B' | 'A' | 'S';
-
-export const TIER_CONFIG = {
-    C: { minBudget: 20000, maxBudget: 39999, duration: 7, commission: 20 },
-    B: { minBudget: 40000, maxBudget: 69999, duration: 14, commission: 15 },
-    A: { minBudget: 70000, maxBudget: 99999, duration: 21, commission: 12 },
-    S: { minBudget: 100000, maxBudget: 1000000, duration: 30, commission: 10 },
-} as const;
+// Campaign budget utilities (no tiers - budget brackets determine commission & estimates)
 
 export const MIN_BUDGET_TL = 20000;
 export const MAX_BUDGET_TL = 1000000;
+export const MIN_DURATION_DAYS = 5;
+export const MAX_DURATION_DAYS = 30;
+
+interface BudgetBracket {
+    minBudget: number;
+    maxBudget: number;
+    commission: number;
+    reachMin: number;
+    reachMax: number;
+    likeMinRate: number;
+    likeMaxRate: number;
+    shareMinRate: number;
+    shareMaxRate: number;
+}
+
+const BUDGET_BRACKETS: BudgetBracket[] = [
+    { minBudget: 100000, maxBudget: 1000000, commission: 10, reachMin: 20, reachMax: 35, likeMinRate: 0.06, likeMaxRate: 0.09, shareMinRate: 0.015, shareMaxRate: 0.022 },
+    { minBudget: 70000,  maxBudget: 99999,   commission: 12, reachMin: 15, reachMax: 28, likeMinRate: 0.05, likeMaxRate: 0.08, shareMinRate: 0.012, shareMaxRate: 0.018 },
+    { minBudget: 40000,  maxBudget: 69999,   commission: 15, reachMin: 12, reachMax: 22, likeMinRate: 0.05, likeMaxRate: 0.07, shareMinRate: 0.01,  shareMaxRate: 0.015 },
+    { minBudget: 20000,  maxBudget: 39999,   commission: 20, reachMin: 8,  reachMax: 15, likeMinRate: 0.04, likeMaxRate: 0.06, shareMinRate: 0.008, shareMaxRate: 0.012 },
+];
 
 /**
- * Calculate campaign tier based on total budget in TL
- * Boundary values go to upper tier (40k = B, 70k = A, 100k = S)
+ * Get the budget bracket for a given budget
  */
-export function getCampaignTierFromBudget(budgetTL: number): Tier | null {
+export function getBudgetBracket(budgetTL: number): BudgetBracket | null {
     if (budgetTL < MIN_BUDGET_TL) return null;
-    if (budgetTL >= 100000) return 'S';
-    if (budgetTL >= 70000) return 'A';
-    if (budgetTL >= 40000) return 'B';
-    return 'C';
-}
-
-/**
- * Get campaign duration in days for a tier
- */
-export function getDurationForTier(tier: Tier): number {
-    return TIER_CONFIG[tier].duration;
-}
-
-/**
- * Get commission percentage for a tier
- */
-export function getCommissionForTier(tier: Tier): number {
-    return TIER_CONFIG[tier].commission;
-}
-
-/**
- * Get estimated reach (view count range) based on tier and budget
- */
-export function getEstimatedReach(tier: Tier, budgetTL: number): { min: number; max: number } {
-    switch (tier) {
-        case 'C': return { min: budgetTL * 8, max: budgetTL * 15 };
-        case 'B': return { min: budgetTL * 12, max: budgetTL * 22 };
-        case 'A': return { min: budgetTL * 15, max: budgetTL * 28 };
-        case 'S': return { min: budgetTL * 20, max: budgetTL * 35 };
+    for (const bracket of BUDGET_BRACKETS) {
+        if (budgetTL >= bracket.minBudget) return bracket;
     }
+    return null;
 }
 
 /**
- * Get estimated engagement (likes, shares) based on tier and reach
+ * Get commission percentage based on budget amount
+ * Same 4 brackets as before: 20k→20%, 40k→15%, 70k→12%, 100k→10%
  */
-export function getEstimatedEngagement(tier: Tier, budgetTL: number): {
+export function getCommissionFromBudget(budgetTL: number): number | null {
+    const bracket = getBudgetBracket(budgetTL);
+    return bracket ? bracket.commission : null;
+}
+
+/**
+ * Get estimated reach (view count range) based on budget and campaign duration
+ * Duration factor: durationDays / 15 (15 days = 1.0x baseline)
+ */
+export function getEstimatedReach(budgetTL: number, durationDays: number): { min: number; max: number } {
+    const bracket = getBudgetBracket(budgetTL);
+    if (!bracket) return { min: 0, max: 0 };
+    const durationFactor = durationDays / 15;
+    return {
+        min: Math.round(budgetTL * bracket.reachMin * durationFactor),
+        max: Math.round(budgetTL * bracket.reachMax * durationFactor),
+    };
+}
+
+/**
+ * Get estimated engagement (likes, shares) based on budget and duration
+ */
+export function getEstimatedEngagement(budgetTL: number, durationDays: number): {
     likes: { min: number; max: number };
     shares: { min: number; max: number };
 } {
-    const reach = getEstimatedReach(tier, budgetTL);
-    switch (tier) {
-        case 'C': return {
-            likes: { min: Math.round(reach.min * 0.04), max: Math.round(reach.max * 0.06) },
-            shares: { min: Math.round(reach.min * 0.008), max: Math.round(reach.max * 0.012) },
-        };
-        case 'B': return {
-            likes: { min: Math.round(reach.min * 0.05), max: Math.round(reach.max * 0.07) },
-            shares: { min: Math.round(reach.min * 0.01), max: Math.round(reach.max * 0.015) },
-        };
-        case 'A': return {
-            likes: { min: Math.round(reach.min * 0.05), max: Math.round(reach.max * 0.08) },
-            shares: { min: Math.round(reach.min * 0.012), max: Math.round(reach.max * 0.018) },
-        };
-        case 'S': return {
-            likes: { min: Math.round(reach.min * 0.06), max: Math.round(reach.max * 0.09) },
-            shares: { min: Math.round(reach.min * 0.015), max: Math.round(reach.max * 0.022) },
-        };
-    }
+    const bracket = getBudgetBracket(budgetTL);
+    if (!bracket) return {
+        likes: { min: 0, max: 0 },
+        shares: { min: 0, max: 0 },
+    };
+    const reach = getEstimatedReach(budgetTL, durationDays);
+    return {
+        likes: { min: Math.round(reach.min * bracket.likeMinRate), max: Math.round(reach.max * bracket.likeMaxRate) },
+        shares: { min: Math.round(reach.min * bracket.shareMinRate), max: Math.round(reach.max * bracket.shareMaxRate) },
+    };
 }

@@ -3,7 +3,7 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { UserRole } from "@prisma/client";
 import { logApiCallSimple, extractEndpoint } from "@/lib/api-logger-simple";
-import { getCampaignTierFromBudget, getDurationForTier, getCommissionForTier, MIN_BUDGET_TL, MAX_BUDGET_TL } from "@/server/lib/tierUtils";
+import { getCommissionFromBudget, MIN_BUDGET_TL, MAX_BUDGET_TL, MIN_DURATION_DAYS, MAX_DURATION_DAYS } from "@/server/lib/tierUtils";
 
 // Force dynamic rendering for Cloudflare Pages
 export const dynamic = 'force-dynamic';
@@ -28,6 +28,7 @@ export async function POST(req: NextRequest) {
       title,
       description,
       totalBudget,
+      durationDays,
       minVideoDuration,
     } = await req.json();
 
@@ -53,17 +54,22 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Auto-calculate tier, duration, and commission from budget
-    const tier = getCampaignTierFromBudget(totalBudget);
-    if (!tier) {
+    // Validate duration
+    if (!durationDays || durationDays < MIN_DURATION_DAYS || durationDays > MAX_DURATION_DAYS) {
+      return NextResponse.json(
+        { error: `Campaign duration must be between ${MIN_DURATION_DAYS} and ${MAX_DURATION_DAYS} days` },
+        { status: 400 }
+      );
+    }
+
+    // Auto-calculate commission from budget bracket
+    const commissionPercent = getCommissionFromBudget(totalBudget);
+    if (commissionPercent === null) {
       return NextResponse.json(
         { error: "Invalid budget amount" },
         { status: 400 }
       );
     }
-
-    const durationDays = getDurationForTier(tier);
-    const commissionPercent = getCommissionForTier(tier);
 
     // Check if user has sufficient balance
     const user = await prisma.user.findUnique({
@@ -119,7 +125,6 @@ export async function POST(req: NextRequest) {
           startDate: null,
           endDate: null,
           status: "PENDING_APPROVAL",
-          tier: tier as any,
           durationDays,
           commissionPercent,
         },

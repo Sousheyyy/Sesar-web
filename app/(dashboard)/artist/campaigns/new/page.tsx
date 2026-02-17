@@ -9,7 +9,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { SongUpload } from "@/components/upload/song-upload";
-import { Music2, CheckCircle2, Sparkles, ChevronLeft, ChevronRight, Clock, TrendingUp, Users, Eye, Heart, Share2 } from "lucide-react";
+import { Music2, CheckCircle2, Sparkles, ChevronLeft, ChevronRight, Clock, TrendingUp, Users, Eye, Heart, Share2, CalendarDays } from "lucide-react";
 import { TLIcon } from "@/components/icons/tl-icon";
 import { cn, formatCurrency } from "@/lib/utils";
 
@@ -18,38 +18,38 @@ export const dynamic = 'force-dynamic';
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 
-// Tier configuration (mirrors server-side tierUtils)
-const TIER_CONFIG = {
-  S: { min: 100000, max: 1000000, duration: 30, commission: 10, label: 'S Tier', color: '#f59e0b' },
-  A: { min: 70000, max: 99999, duration: 21, commission: 12, label: 'A Tier', color: '#8b5cf6' },
-  B: { min: 40000, max: 69999, duration: 14, commission: 15, label: 'B Tier', color: '#3b82f6' },
-  C: { min: 20000, max: 39999, duration: 7, commission: 20, label: 'C Tier', color: '#22c55e' },
-} as const;
+// Budget bracket system (mirrors server-side tierUtils)
+const MIN_BUDGET = 20000;
+const MAX_BUDGET = 1000000;
+const MIN_DURATION = 5;
+const MAX_DURATION = 30;
 
-type TierKey = keyof typeof TIER_CONFIG;
+const BUDGET_BRACKETS = [
+  { min: 100000, max: 1000000, commission: 10, reachMin: 20, reachMax: 35, likeMin: 0.06, likeMax: 0.09, shareMin: 0.015, shareMax: 0.022 },
+  { min: 70000,  max: 99999,   commission: 12, reachMin: 15, reachMax: 28, likeMin: 0.05, likeMax: 0.08, shareMin: 0.012, shareMax: 0.018 },
+  { min: 40000,  max: 69999,   commission: 15, reachMin: 12, reachMax: 22, likeMin: 0.05, likeMax: 0.07, shareMin: 0.01,  shareMax: 0.015 },
+  { min: 20000,  max: 39999,   commission: 20, reachMin: 8,  reachMax: 15, likeMin: 0.04, likeMax: 0.06, shareMin: 0.008, shareMax: 0.012 },
+];
 
-function getTierFromBudget(budget: number): TierKey | null {
-  if (budget >= 100000) return 'S';
-  if (budget >= 70000) return 'A';
-  if (budget >= 40000) return 'B';
-  if (budget >= 20000) return 'C';
+function getBracket(budget: number) {
+  if (budget < MIN_BUDGET) return null;
+  for (const b of BUDGET_BRACKETS) {
+    if (budget >= b.min) return b;
+  }
   return null;
 }
 
-function getEstimatedReach(tier: TierKey, budget: number) {
-  const multipliers: Record<TierKey, { minMul: number; maxMul: number; likeMin: number; likeMax: number; shareMin: number; shareMax: number }> = {
-    C: { minMul: 8, maxMul: 15, likeMin: 0.04, likeMax: 0.06, shareMin: 0.008, shareMax: 0.012 },
-    B: { minMul: 12, maxMul: 22, likeMin: 0.05, likeMax: 0.07, shareMin: 0.01, shareMax: 0.015 },
-    A: { minMul: 15, maxMul: 28, likeMin: 0.05, likeMax: 0.08, shareMin: 0.012, shareMax: 0.018 },
-    S: { minMul: 20, maxMul: 35, likeMin: 0.06, likeMax: 0.09, shareMin: 0.015, shareMax: 0.022 },
-  };
-  const m = multipliers[tier];
-  const minViews = budget * m.minMul;
-  const maxViews = budget * m.maxMul;
+function getEstimates(budget: number, durationDays: number) {
+  const bracket = getBracket(budget);
+  if (!bracket) return null;
+  const df = durationDays / 15;
+  const minViews = Math.round(budget * bracket.reachMin * df);
+  const maxViews = Math.round(budget * bracket.reachMax * df);
   return {
+    commission: bracket.commission,
     minViews, maxViews,
-    minLikes: Math.round(minViews * m.likeMin), maxLikes: Math.round(maxViews * m.likeMax),
-    minShares: Math.round(minViews * m.shareMin), maxShares: Math.round(maxViews * m.shareMax),
+    minLikes: Math.round(minViews * bracket.likeMin), maxLikes: Math.round(maxViews * bracket.likeMax),
+    minShares: Math.round(minViews * bracket.shareMin), maxShares: Math.round(maxViews * bracket.shareMax),
   };
 }
 
@@ -58,6 +58,9 @@ function formatNum(n: number): string {
   if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
   return n.toString();
 }
+
+const TURKISH_MONTHS = ['Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'];
+const TURKISH_DAYS_SHORT = ['Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt', 'Paz'];
 
 interface Song {
   id: string;
@@ -83,6 +86,7 @@ export default function NewCampaignPage() {
     title: "",
     description: "",
     totalBudget: "",
+    durationDays: 15,
     minVideoDuration: "15",
   });
 
@@ -122,11 +126,54 @@ export default function NewCampaignPage() {
     toast.success("Şarkı başarıyla eklendi!");
   };
 
-  // Tier calculations
+  // Budget and duration calculations
   const budget = parseFloat(formData.totalBudget) || 0;
-  const tier = useMemo(() => getTierFromBudget(budget), [budget]);
-  const tierConfig = tier ? TIER_CONFIG[tier] : null;
-  const estimates = useMemo(() => tier ? getEstimatedReach(tier, budget) : null, [tier, budget]);
+  const bracket = useMemo(() => getBracket(budget), [budget]);
+  const estimates = useMemo(() => bracket ? getEstimates(budget, formData.durationDays) : null, [bracket, budget, formData.durationDays]);
+
+  // Calendar state
+  const startDate = useMemo(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 3);
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }, []);
+
+  const endDate = useMemo(() => {
+    const d = new Date(startDate);
+    d.setDate(d.getDate() + formData.durationDays);
+    return d;
+  }, [startDate, formData.durationDays]);
+
+  const [calendarMonth, setCalendarMonth] = useState(() => ({
+    year: startDate.getFullYear(),
+    month: startDate.getMonth(),
+  }));
+
+  const calendarDays = useMemo(() => {
+    const { year, month } = calendarMonth;
+    const firstDay = new Date(year, month, 1);
+    const lastDay = new Date(year, month + 1, 0);
+    let startDow = firstDay.getDay() - 1;
+    if (startDow < 0) startDow = 6;
+
+    const days: (Date | null)[] = [];
+    for (let i = 0; i < startDow; i++) days.push(null);
+    for (let d = 1; d <= lastDay.getDate(); d++) {
+      days.push(new Date(year, month, d));
+    }
+    return days;
+  }, [calendarMonth]);
+
+  const isInRange = (date: Date) => {
+    const s = new Date(startDate); s.setHours(0,0,0,0);
+    const e = new Date(endDate); e.setHours(0,0,0,0);
+    const d = new Date(date); d.setHours(0,0,0,0);
+    return d >= s && d <= e;
+  };
+
+  const isStart = (date: Date) => date.toDateString() === startDate.toDateString();
+  const isEnd = (date: Date) => date.toDateString() === endDate.toDateString();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -143,12 +190,12 @@ export default function NewCampaignPage() {
       return;
     }
 
-    if (totalBudget < 20000) {
+    if (totalBudget < MIN_BUDGET) {
       toast.error("Minimum kampanya bütçesi ₺20,000");
       return;
     }
 
-    if (totalBudget > 1000000) {
+    if (totalBudget > MAX_BUDGET) {
       toast.error("Maksimum kampanya bütçesi ₺1,000,000");
       return;
     }
@@ -164,6 +211,7 @@ export default function NewCampaignPage() {
           title: formData.title,
           description: formData.description || null,
           totalBudget,
+          durationDays: formData.durationDays,
           minVideoDuration: formData.minVideoDuration ? parseInt(formData.minVideoDuration) : null,
         }),
       });
@@ -364,7 +412,7 @@ export default function NewCampaignPage() {
 
         </div>
 
-        {/* Right Column - Sticky Sidebar with Budget & Tier Calculator */}
+        {/* Right Column - Sticky Sidebar with Budget & Duration */}
         <div className="space-y-6">
           <Card className="border-primary/20 shadow-lg sticky top-6">
             <CardContent className="space-y-6 pt-6">
@@ -388,17 +436,111 @@ export default function NewCampaignPage() {
                   <span>Max: ₺1,000,000</span>
                 </div>
 
-                {/* Tier Calculator Panel */}
-                {tier && tierConfig && estimates && (
-                  <div className="space-y-4 pt-2">
-                    {/* Tier Badge */}
-                    <div className="flex items-center justify-between p-3 rounded-lg border" style={{ borderColor: tierConfig.color, backgroundColor: `${tierConfig.color}10` }}>
-                      <span className="text-sm font-bold" style={{ color: tierConfig.color }}>{tierConfig.label}</span>
-                      <Badge variant="outline" style={{ borderColor: tierConfig.color, color: tierConfig.color }}>
-                        {tierConfig.duration} gün
-                      </Badge>
-                    </div>
+                {/* Duration Slider */}
+                <div className="space-y-3 pt-3">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-sm font-semibold flex items-center gap-1.5">
+                      <CalendarDays className="h-4 w-4 text-primary" />
+                      Kampanya Süresi
+                    </Label>
+                    <Badge variant="outline" className="text-primary border-primary font-bold">
+                      {formData.durationDays} gün
+                    </Badge>
+                  </div>
+                  <input
+                    type="range"
+                    min={MIN_DURATION}
+                    max={MAX_DURATION}
+                    value={formData.durationDays}
+                    onChange={(e) => setFormData({ ...formData, durationDays: parseInt(e.target.value) })}
+                    className="w-full h-2 bg-muted rounded-lg appearance-none cursor-pointer accent-primary"
+                  />
+                  <div className="flex items-center justify-between text-xs text-muted-foreground px-1">
+                    <span>{MIN_DURATION} gün</span>
+                    <span>{MAX_DURATION} gün</span>
+                  </div>
 
+                  {/* Quick select buttons */}
+                  <div className="flex gap-1.5">
+                    {[5, 7, 14, 21, 30].map(d => (
+                      <button
+                        key={d}
+                        onClick={() => setFormData({ ...formData, durationDays: d })}
+                        className={cn(
+                          "flex-1 py-1.5 rounded-md text-xs font-semibold transition-colors border",
+                          formData.durationDays === d
+                            ? "bg-primary text-primary-foreground border-primary"
+                            : "bg-muted/50 text-muted-foreground border-muted hover:border-primary/50"
+                        )}
+                      >
+                        {d}g
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Mini Calendar */}
+                <div className="rounded-lg border p-3 bg-muted/30">
+                  <div className="flex items-center justify-between mb-2">
+                    <button
+                      onClick={() => setCalendarMonth(prev =>
+                        prev.month === 0 ? { year: prev.year - 1, month: 11 } : { ...prev, month: prev.month - 1 }
+                      )}
+                      className="p-1 hover:bg-muted rounded"
+                    >
+                      <ChevronLeft className="h-3.5 w-3.5" />
+                    </button>
+                    <span className="text-xs font-semibold">
+                      {TURKISH_MONTHS[calendarMonth.month]} {calendarMonth.year}
+                    </span>
+                    <button
+                      onClick={() => setCalendarMonth(prev =>
+                        prev.month === 11 ? { year: prev.year + 1, month: 0 } : { ...prev, month: prev.month + 1 }
+                      )}
+                      className="p-1 hover:bg-muted rounded"
+                    >
+                      <ChevronRight className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-7 gap-0.5 mb-1">
+                    {TURKISH_DAYS_SHORT.map(d => (
+                      <div key={d} className="text-center text-[9px] text-muted-foreground font-medium">{d}</div>
+                    ))}
+                  </div>
+                  <div className="grid grid-cols-7 gap-0.5">
+                    {calendarDays.map((date, idx) => {
+                      if (!date) return <div key={`e-${idx}`} className="h-6" />;
+                      const inRange = isInRange(date);
+                      const start = isStart(date);
+                      const end = isEnd(date);
+                      return (
+                        <div key={idx} className="flex items-center justify-center h-6">
+                          <div className={cn(
+                            "w-5 h-5 flex items-center justify-center rounded-full text-[10px] font-medium",
+                            start ? "bg-primary text-primary-foreground" :
+                            end ? "bg-violet-500 text-white" :
+                            inRange ? "bg-primary/15 text-primary" :
+                            "text-muted-foreground"
+                          )}>
+                            {date.getDate()}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="flex justify-between mt-2 pt-2 border-t text-[10px]">
+                    <span className="text-primary font-semibold">
+                      Başlangıç: {startDate.getDate()} {TURKISH_MONTHS[startDate.getMonth()].slice(0,3)}
+                    </span>
+                    <span className="text-violet-500 font-semibold">
+                      Bitiş: {endDate.getDate()} {TURKISH_MONTHS[endDate.getMonth()].slice(0,3)}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Metrics */}
+                {bracket && estimates && (
+                  <div className="space-y-4 pt-2">
                     {/* Key Metrics */}
                     <div className="grid grid-cols-2 gap-2">
                       <div className="p-2.5 rounded-lg bg-muted/50 border">
@@ -406,14 +548,14 @@ export default function NewCampaignPage() {
                           <Clock className="h-3 w-3 text-muted-foreground" />
                           <span className="text-[10px] text-muted-foreground font-medium">Süre</span>
                         </div>
-                        <p className="text-sm font-bold">{tierConfig.duration} gün</p>
+                        <p className="text-sm font-bold">{formData.durationDays} gün</p>
                       </div>
                       <div className="p-2.5 rounded-lg bg-muted/50 border">
                         <div className="flex items-center gap-1.5 mb-1">
                           <TrendingUp className="h-3 w-3 text-muted-foreground" />
                           <span className="text-[10px] text-muted-foreground font-medium">Komisyon</span>
                         </div>
-                        <p className="text-sm font-bold">%{tierConfig.commission}</p>
+                        <p className="text-sm font-bold">%{estimates.commission}</p>
                       </div>
                     </div>
 
@@ -422,7 +564,7 @@ export default function NewCampaignPage() {
                       <div className="flex items-center justify-between">
                         <span className="text-xs text-muted-foreground">Net Bütçe (Üreticilere)</span>
                         <span className="text-sm font-bold text-green-500">
-                          {formatCurrency(budget * (100 - tierConfig.commission) / 100)}
+                          {formatCurrency(budget * (100 - estimates.commission) / 100)}
                         </span>
                       </div>
                     </div>
@@ -490,11 +632,11 @@ export default function NewCampaignPage() {
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Süre</span>
-                  <span className="font-medium">{tierConfig ? `${tierConfig.duration} Gün` : "-"}</span>
+                  <span className="font-medium">{formData.durationDays} Gün</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Komisyon</span>
-                  <span className="font-medium">{tierConfig ? `%${tierConfig.commission}` : "-"}</span>
+                  <span className="font-medium">{estimates ? `%${estimates.commission}` : "-"}</span>
                 </div>
                 <div className="flex justify-between items-center pt-2 text-lg font-bold">
                   <span>Toplam</span>
@@ -506,7 +648,7 @@ export default function NewCampaignPage() {
 
               <Button
                 onClick={handleSubmit}
-                disabled={isLoading || !formData.songId || !formData.totalBudget || !tier}
+                disabled={isLoading || !formData.songId || !formData.totalBudget || !bracket}
                 className="w-full h-12 text-lg font-semibold shadow-md transition-all hover:shadow-lg hover:scale-[1.02]"
               >
                 {isLoading ? "Oluşturuluyor..." : "Kampanyayı Başlat"}
