@@ -8,9 +8,10 @@ export const dynamic = 'force-dynamic';
 
 export async function GET(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { id } = await params;
     const session = await auth();
 
     if (!session?.user) {
@@ -19,7 +20,7 @@ export async function GET(
 
     // Get the song
     const song = await prisma.song.findUnique({
-      where: { id: params.id },
+      where: { id },
       select: {
         id: true,
         title: true,

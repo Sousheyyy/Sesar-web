@@ -1,23 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
+import { requireAdmin } from "@/lib/auth-utils";
 import { prisma } from "@/lib/prisma";
-import { UserRole } from "@prisma/client";
+import { logAdminAction } from "@/lib/audit-log";
 
 // Force dynamic rendering for Cloudflare Pages
 export const dynamic = 'force-dynamic';
 
 export async function POST(
   req: NextRequest,
-  { params }: { params: { id: string; action: string } }
+  { params }: { params: Promise<{ id: string; action: string }> }
 ) {
   try {
-    const session = await auth();
-
-    if (!session?.user || session.user.role !== UserRole.ADMIN) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
-    const { id, action } = params;
+    const { id, action } = await params;
+    const admin = await requireAdmin();
 
     if (action !== "approve" && action !== "reject") {
       return NextResponse.json({ error: "Invalid action" }, { status: 400 });
@@ -25,7 +20,13 @@ export async function POST(
 
     const transaction = await prisma.transaction.findUnique({
       where: { id },
-      include: { user: true },
+      select: {
+        id: true,
+        userId: true,
+        type: true,
+        amount: true,
+        status: true,
+      },
     });
 
     if (!transaction) {
@@ -42,10 +43,16 @@ export async function POST(
       );
     }
 
+    // Only DEPOSIT and WITHDRAWAL can be processed through this route
+    if (transaction.type !== "DEPOSIT" && transaction.type !== "WITHDRAWAL") {
+      return NextResponse.json(
+        { error: "Only deposit and withdrawal transactions can be processed" },
+        { status: 400 }
+      );
+    }
+
     if (action === "approve") {
-      // Approve transaction
       if (transaction.type === "DEPOSIT") {
-        // Add funds to user balance
         await prisma.$transaction([
           prisma.user.update({
             where: { id: transaction.userId },
@@ -55,23 +62,21 @@ export async function POST(
             where: { id },
             data: {
               status: "COMPLETED",
-              approvedBy: session.user.id,
+              approvedBy: admin.id,
               approvedAt: new Date(),
             },
           }),
         ]);
 
-        // Notify user
         await prisma.notification.create({
           data: {
             userId: transaction.userId,
-            title: "Deposit Approved",
-            message: `Your deposit of $${transaction.amount} has been approved and added to your wallet`,
-            link: "/wallet",
+            title: "Para Yatırma Onaylandı",
+            message: `${transaction.amount} TL tutarındaki para yatırma işleminiz onaylandı ve cüzdanınıza eklendi`,
+            link: "/artist/wallet",
           },
         });
-      } else if (transaction.type === "WITHDRAWAL") {
-        // Deduct funds from user balance
+      } else {
         await prisma.$transaction([
           prisma.user.update({
             where: { id: transaction.userId },
@@ -81,47 +86,49 @@ export async function POST(
             where: { id },
             data: {
               status: "COMPLETED",
-              approvedBy: session.user.id,
+              approvedBy: admin.id,
               approvedAt: new Date(),
             },
           }),
         ]);
 
-        // Notify user
         await prisma.notification.create({
           data: {
             userId: transaction.userId,
-            title: "Withdrawal Approved",
-            message: `Your withdrawal of $${transaction.amount} has been approved and processed`,
-            link: "/wallet",
+            title: "Para Çekme Onaylandı",
+            message: `${transaction.amount} TL tutarındaki para çekme işleminiz onaylandı ve işleme alındı`,
+            link: "/artist/wallet",
           },
         });
       }
+
+      logAdminAction(admin.id, admin.email, "TRANSACTION_APPROVE", "Transaction", id, { type: transaction.type, amount: Number(transaction.amount) });
 
       return NextResponse.json({
         success: true,
         message: "Transaction approved",
       });
     } else {
-      // Reject transaction
       await prisma.transaction.update({
         where: { id },
         data: {
           status: "REJECTED",
-          approvedBy: session.user.id,
+          approvedBy: admin.id,
           approvedAt: new Date(),
         },
       });
 
-      // Notify user
+      const typeLabel = transaction.type === "DEPOSIT" ? "para yatırma" : "para çekme";
       await prisma.notification.create({
         data: {
           userId: transaction.userId,
-          title: "Transaction Rejected",
-          message: `Your ${transaction.type.toLowerCase()} request of $${transaction.amount} has been rejected`,
-          link: "/wallet",
+          title: "İşlem Reddedildi",
+          message: `${transaction.amount} TL tutarındaki ${typeLabel} talebiniz reddedildi`,
+          link: "/artist/wallet",
         },
       });
+
+      logAdminAction(admin.id, admin.email, "TRANSACTION_REJECT", "Transaction", id, { type: transaction.type, amount: Number(transaction.amount) });
 
       return NextResponse.json({
         success: true,
@@ -136,11 +143,3 @@ export async function POST(
     );
   }
 }
-
-
-
-
-
-
-
-

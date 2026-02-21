@@ -2,25 +2,26 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth-utils";
 import { prisma } from "@/lib/prisma";
 import { calculateCampaignPayouts } from "@/lib/payout";
+import { logAdminAction } from "@/lib/audit-log";
 
 // Force dynamic rendering for Cloudflare Pages
 export const dynamic = 'force-dynamic';
 
 export async function POST(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    await requireAdmin();
+    const { id } = await params;
+    const admin = await requireAdmin();
 
     const campaign = await prisma.campaign.findUnique({
-      where: { id: params.id },
-      include: {
-        submissions: {
-          where: {
-            status: "APPROVED",
-          },
-        },
+      where: { id },
+      select: {
+        id: true,
+        status: true,
+        lockedAt: true,
+        payoutStatus: true,
       },
     });
 
@@ -48,14 +49,15 @@ export async function POST(
     // Lock campaign if not already locked
     if (!campaign.lockedAt) {
       await prisma.campaign.update({
-        where: { id: params.id },
+        where: { id: id },
         data: { lockedAt: new Date() },
       });
     }
 
     // Process final distribution (insurance → eligibility → Robin Hood → wallet payouts)
-    console.log(`Processing final distribution for campaign ${params.id}...`);
-    const payoutResult = await calculateCampaignPayouts(params.id);
+    const payoutResult = await calculateCampaignPayouts(id);
+
+    logAdminAction(admin.id, admin.email, "CAMPAIGN_FINISH", "Campaign", id);
 
     return NextResponse.json({
       success: true,

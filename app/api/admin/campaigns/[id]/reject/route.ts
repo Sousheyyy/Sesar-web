@@ -1,28 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
+import { requireAdmin } from "@/lib/auth-utils";
 import { prisma } from "@/lib/prisma";
-import { UserRole } from "@prisma/client";
+import { logAdminAction } from "@/lib/audit-log";
 
 // Force dynamic rendering for Cloudflare Pages
 export const dynamic = 'force-dynamic';
 
 export async function POST(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const session = await auth();
-
-    if (!session?.user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
-    if (session.user.role !== UserRole.ADMIN) {
-      return NextResponse.json(
-        { error: "Admin access required" },
-        { status: 403 }
-      );
-    }
+    const { id } = await params;
+    const admin = await requireAdmin();
 
     const body = await req.json();
     const reason = body?.reason;
@@ -34,8 +24,15 @@ export async function POST(
       );
     }
 
+    if (reason.trim().length > 500) {
+      return NextResponse.json(
+        { error: "Rejection reason must be 500 characters or less" },
+        { status: 400 }
+      );
+    }
+
     const campaign = await prisma.campaign.findUnique({
-      where: { id: params.id },
+      where: { id },
     });
 
     if (!campaign) {
@@ -56,7 +53,7 @@ export async function POST(
     await prisma.$transaction(async (tx) => {
       // Update campaign status with rejection reason
       await tx.campaign.update({
-        where: { id: params.id },
+        where: { id },
         data: {
           status: "CANCELLED",
           rejectionReason: reason.trim(),
@@ -95,6 +92,8 @@ export async function POST(
       });
     });
 
+    logAdminAction(admin.id, admin.email, "CAMPAIGN_REJECT", "Campaign", id, { title: campaign.title, reason: reason.trim() });
+
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error("Campaign rejection error:", error);
@@ -104,9 +103,5 @@ export async function POST(
     );
   }
 }
-
-
-
-
 
 

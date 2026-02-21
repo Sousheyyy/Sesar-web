@@ -95,7 +95,6 @@ export async function GET(req: NextRequest) {
           select: {
             id: true,
             name: true,
-            email: true,
           },
         },
         _count: {
@@ -124,10 +123,8 @@ export async function GET(req: NextRequest) {
   } catch (error) {
     console.error("Songs fetch error:", error);
     return NextResponse.json(
-      { error: "Failed to fetch songs" },
+      { error: "Failed to fetch songs", detail: error instanceof Error ? error.message : String(error) },
       { status: 500 }
     );
   }
 }
-
-

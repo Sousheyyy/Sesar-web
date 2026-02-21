@@ -19,6 +19,16 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="tr" className="dark" suppressHydrationWarning>
+      <head>
+        {/* Polyfill esbuild's __name helper — OpenNext's esbuild bundler injects
+            __name() calls into server-rendered inline scripts (e.g. next-themes)
+            that execute before any external JS chunk loads. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: 'globalThis.__name=globalThis.__name||((t,v)=>Object.defineProperty(t,"name",{value:v,configurable:true}));',
+          }}
+        />
+      </head>
       <body className={inter.className}>
         <Providers>{children}</Providers>
       </body>

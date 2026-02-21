@@ -52,7 +52,7 @@ export default function LoginPage() {
                 if (profile?.role === UserRole.ADMIN) {
                   window.location.href = "/admin/analytics";
                 } else if (profile?.role === UserRole.ARTIST) {
-                  window.location.href = "/artist/campaigns";
+                  window.location.href = "/artist";
                 } else {
                   // CREATOR role - restrict and sign out
                   await supabase.auth.signOut();

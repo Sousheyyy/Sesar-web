@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { tiktokMetadata } from "@/lib/tiktok-metadata";
+import { fetchVideoViaInsightIQ } from "@/lib/insightiq";
 import { updateEstimatedPayouts } from "@/lib/payout";
-import { extractTikTokUsernameFromUrl } from "@/lib/url-utils";
 import { logApiCallSimple, extractEndpoint } from "@/lib/api-logger-simple";
 
 // Force dynamic rendering for Cloudflare Pages
@@ -26,10 +25,24 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Validate TikTok URL
-    if (!tiktokUrl.includes("tiktok.com")) {
+    // Validate TikTok URL — accept web (tiktok.com) and mobile (vm.tiktok.com) links
+    let isValidTiktokUrl = false;
+    try {
+      const parsed = new URL(tiktokUrl);
+      const host = parsed.hostname.toLowerCase();
+      isValidTiktokUrl =
+        host === "tiktok.com" ||
+        host === "www.tiktok.com" ||
+        host === "vm.tiktok.com" ||
+        host === "m.tiktok.com" ||
+        host === "vt.tiktok.com";
+    } catch {
+      isValidTiktokUrl = false;
+    }
+
+    if (!isValidTiktokUrl) {
       return NextResponse.json(
-        { error: "Invalid TikTok URL" },
+        { error: "Geçersiz TikTok linki. Lütfen tiktok.com veya vm.tiktok.com adresinden bir link girin." },
         { status: 400 }
       );
     }
@@ -121,6 +134,7 @@ export async function POST(req: NextRequest) {
           lastCommentCount: 0,
           lastShareCount: 0,
           tiktokVideoId: null,
+          insightiqContentId: null,
           creatorFollowers: null,
           videoDuration: null,
         },
@@ -152,57 +166,63 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // Attempt automatic verification
+    // Attempt automatic verification via InsightIQ
     let autoVerificationSuccess = false;
     let rejectionReason = "";
 
     try {
-      // Fetch video data from TikTok using new metadata service
-      const videoMetadata = await tiktokMetadata.getVideoMetadata(tiktokUrl);
+      const contentData = await fetchVideoViaInsightIQ(tiktokUrl);
 
-      // VERIFICATION STEP 2: Verify video ownership (video belongs to connected TikTok account)
+      // VERIFICATION STEP 2: Verify video ownership
       const normalizeUsername = (username: string) => {
         return username.replace(/^@/, "").toLowerCase().trim();
       };
 
       const userHandle = normalizeUsername(user.tiktokHandle);
-      const videoCreatorUsername = normalizeUsername(videoMetadata.author);
+      const videoUsername = contentData.profile?.platform_username?.toLowerCase() || contentData.creator?.platform_username?.toLowerCase() || "";
 
-      if (videoCreatorUsername !== userHandle) {
+      if (!videoUsername || normalizeUsername(videoUsername) !== userHandle) {
         rejectionReason = `Bu video bağlı TikTok hesabınıza (@${user.tiktokHandle}) ait değil. Lütfen kendi hesabınızdan bir video gönderin.`;
       }
-      // VERIFICATION STEP 3: Check if song matches (EXACT MATCH ONLY)
-      else {
-        const songMatch = tiktokMetadata.validateSongMatch(
-          {
-            id: campaign.song.tiktokMusicId!,
-            title: campaign.song.title,
-            authorName: campaign.song.authorName!
-          },
-          videoMetadata.song
-        );
-        
-        if (!songMatch.match) {
-          rejectionReason = `Video doğru şarkıyı kullanmıyor: ${songMatch.reason}`;
+
+      // VERIFICATION STEP 3: Check if song matches
+      if (!rejectionReason) {
+        const audioTrack = contentData.audio_track_info || contentData.music;
+        let isSongMatch = false;
+        if (audioTrack) {
+          const trackTitle = (audioTrack.title || audioTrack.name || '').toLowerCase();
+          const campaignSongTitle = (campaign.song.title || '').toLowerCase();
+          const titleMatch = trackTitle.includes(campaignSongTitle) || campaignSongTitle.includes(trackTitle);
+          const idMatch = !!(campaign.song.tiktokMusicId && (audioTrack.platform_audio_id || audioTrack.id) === campaign.song.tiktokMusicId);
+          isSongMatch = !!(titleMatch || idMatch);
+        }
+        if (!isSongMatch) {
+          rejectionReason = `Video doğru şarkıyı kullanmıyor: Kampanya şarkısı "${campaign.song.title}" videoda bulunamadı.`;
         }
       }
+
       // VERIFICATION STEP 4: Check duration requirement
-      if (!rejectionReason && campaign.minVideoDuration && videoMetadata.duration < campaign.minVideoDuration) {
-        rejectionReason = `Video süresi (${videoMetadata.duration}sn) gereken süreden (${campaign.minVideoDuration}sn) kısa`;
+      if (!rejectionReason && campaign.minVideoDuration) {
+        const videoDuration = contentData.duration || 0;
+        if (videoDuration < campaign.minVideoDuration) {
+          rejectionReason = `Video süresi (${videoDuration}sn) gereken süreden (${campaign.minVideoDuration}sn) kısa`;
+        }
       }
 
       // All checks passed
       if (!rejectionReason) {
-        // Update submission with video data and approve
+        const engagement = contentData.engagement || {};
+
         await prisma.submission.update({
           where: { id: submission.id },
           data: {
-            tiktokVideoId: videoMetadata.id,
-            lastViewCount: videoMetadata.stats.views,
-            lastLikeCount: videoMetadata.stats.likes,
-            lastCommentCount: videoMetadata.stats.comments,
-            lastShareCount: videoMetadata.stats.shares,
-            videoDuration: videoMetadata.duration,
+            tiktokVideoId: contentData.platform_content_id || contentData.id,
+            insightiqContentId: contentData.id,
+            lastViewCount: engagement.view_count || 0,
+            lastLikeCount: engagement.like_count || 0,
+            lastCommentCount: engagement.comment_count || 0,
+            lastShareCount: engagement.share_count || 0,
+            videoDuration: contentData.duration || null,
             verified: true,
             verifiedAt: new Date(),
             lastCheckedAt: new Date(),
@@ -250,7 +270,7 @@ export async function POST(req: NextRequest) {
       console.warn("Automatic verification failed, submission kept as PENDING:", verificationError);
 
       // Check for specific error types
-      if (verificationError.message?.includes("private") || verificationError.message?.includes("not found")) {
+      if (verificationError.message?.includes("private") || verificationError.message?.includes("not found") || verificationError.message?.includes("herkese açık")) {
         // Video is inaccessible - reject it
         await prisma.submission.update({
           where: { id: submission.id },
@@ -271,7 +291,6 @@ export async function POST(req: NextRequest) {
         });
       }
       // For rate limits or other API errors, leave as PENDING for manual verification
-      // No action needed - submission stays PENDING
     }
 
     // Notify artist about new submission
@@ -328,7 +347,3 @@ export async function POST(req: NextRequest) {
     return response;
   }
 }
-
-
-
-

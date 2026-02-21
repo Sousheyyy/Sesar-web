@@ -101,7 +101,6 @@ export async function POST(req: NextRequest) {
                 name: displayName || tiktokHandle,
                 role: 'CREATOR',
                 balance: 0,
-                couponBalance: 0,
                 plan: 'FREE',
                 cycleStartDate: new Date(),
                 tiktokHandle: tiktokHandle,

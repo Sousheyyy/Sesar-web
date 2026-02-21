@@ -2,9 +2,10 @@
 
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { CheckCircle2, Loader2, AlertCircle } from "lucide-react";
+import { CheckCircle2, Loader2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
+import { ConfirmActionModal } from "@/components/admin/confirm-action-modal";
 
 interface FinishCampaignButtonProps {
   campaignId: string;
@@ -16,6 +17,7 @@ export function FinishCampaignButton({
   campaignStatus,
 }: FinishCampaignButtonProps) {
   const [isLoading, setIsLoading] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
   const router = useRouter();
 
   // Only show button for active campaigns
@@ -24,18 +26,7 @@ export function FinishCampaignButton({
   }
 
   const handleFinishCampaign = async () => {
-    if (
-      !confirm(
-        "Kampanyayı bitirmek istediğinizden emin misiniz? Bu işlem:\n\n" +
-        "1. Tüm videoların son metriklerini çekecek\n" +
-        "2. Herkesin katılım oranını hesaplayacak\n" +
-        "3. Kazançları dağıtacak\n\n" +
-        "Bu işlem geri alınamaz!"
-      )
-    ) {
-      return;
-    }
-
+    setShowConfirm(false);
     setIsLoading(true);
     const toastId = toast.loading("Kampanya bitiriliyor...");
 
@@ -52,10 +43,9 @@ export function FinishCampaignButton({
 
       toast.success("Kampanya başarıyla tamamlandı!", {
         id: toastId,
-        description: `${data.metricsRefresh.updated} video metrikleri güncellendi. ${data.payout.payouts.length} kullanıcıya ödeme yapıldı.`,
+        description: `Ödeme işlemi tamamlandı.`,
       });
 
-      // Refresh the page to show updated status
       router.refresh();
     } catch (error: any) {
       toast.error("Hata oluştu", {
@@ -68,24 +58,33 @@ export function FinishCampaignButton({
   };
 
   return (
-    <Button
-      onClick={handleFinishCampaign}
-      disabled={isLoading}
-      className="gap-2"
-      variant="default"
-    >
-      {isLoading ? (
-        <>
-          <Loader2 className="h-4 w-4 animate-spin" />
-          İşleniyor...
-        </>
-      ) : (
-        <>
-          <CheckCircle2 className="h-4 w-4" />
-          Kampanyayı Bitir
-        </>
-      )}
-    </Button>
+    <>
+      <Button
+        onClick={() => setShowConfirm(true)}
+        disabled={isLoading}
+        className="gap-2"
+        variant="default"
+      >
+        {isLoading ? (
+          <>
+            <Loader2 className="h-4 w-4 animate-spin" />
+            İşleniyor...
+          </>
+        ) : (
+          <>
+            <CheckCircle2 className="h-4 w-4" />
+            Kampanyayı Bitir
+          </>
+        )}
+      </Button>
+      <ConfirmActionModal
+        isOpen={showConfirm}
+        onConfirm={handleFinishCampaign}
+        onCancel={() => setShowConfirm(false)}
+        title="Kampanyayı Bitir"
+        description="Bu işlem kazançları dağıtacak ve geri alınamaz. Devam etmek için şifrenizi girin."
+      />
+    </>
   );
 }
 

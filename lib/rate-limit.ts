@@ -1,8 +1,4 @@
-// In-memory rate limiting (no Redis required)
-interface RequestLog {
-  count: number;
-  resetAt: number;
-}
+import { prisma } from "@/lib/prisma";
 
 interface RateLimitResult {
   success: boolean;
@@ -11,48 +7,29 @@ interface RateLimitResult {
   reset: number;
 }
 
-const requestLogs = new Map<string, RequestLog>();
-
+/**
+ * DB-based rate limiting using apiCallLog table.
+ * Works in both Node.js and Cloudflare Workers (stateless, no in-memory Map).
+ */
 export async function rateLimit(
   identifier: string,
   limit = 10,
   windowMs = 3600000 // 1 hour
 ): Promise<RateLimitResult> {
-  const now = Date.now();
-  const log = requestLogs.get(identifier);
+  const windowStart = new Date(Date.now() - windowMs);
 
-  // Reset if window expired
-  if (!log || now > log.resetAt) {
-    const newLog = { count: 1, resetAt: now + windowMs };
-    requestLogs.set(identifier, newLog);
-
-    return {
-      success: true,
-      limit,
-      remaining: limit - 1,
-      reset: newLog.resetAt
-    };
-  }
-
-  // Increment count
-  log.count++;
+  const count = await prisma.apiCallLog.count({
+    where: {
+      userId: identifier,
+      endpoint: "/api/songs/upload",
+      createdAt: { gte: windowStart },
+    },
+  });
 
   return {
-    success: log.count <= limit,
+    success: count < limit,
     limit,
-    remaining: Math.max(0, limit - log.count),
-    reset: log.resetAt
+    remaining: Math.max(0, limit - count),
+    reset: Date.now() + windowMs,
   };
-}
-
-// Cleanup old entries every hour
-if (typeof setInterval !== 'undefined') {
-  setInterval(() => {
-    const now = Date.now();
-    for (const [key, log] of requestLogs.entries()) {
-      if (now > log.resetAt) {
-        requestLogs.delete(key);
-      }
-    }
-  }, 3600000);
 }

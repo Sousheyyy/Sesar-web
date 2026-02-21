@@ -18,8 +18,8 @@ export async function logApiCallSimple(
       return;
     }
 
-    // Log asynchronously to avoid blocking
-    setImmediate(async () => {
+    // Fire-and-forget async (works in both Node.js and Cloudflare Workers)
+    void (async () => {
       try {
         await prisma.apiCallLog.create({
           data: {
@@ -34,7 +34,7 @@ export async function logApiCallSimple(
         // Silently fail logging
         console.error("Failed to log API call:", error);
       }
-    });
+    })();
   } catch (error) {
     // Silently fail
     console.error("Error in logApiCallSimple:", error);

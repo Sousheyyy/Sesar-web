@@ -1,17 +1,13 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
+import { requireAdmin } from "@/lib/auth-utils";
 import { prisma } from "@/lib/prisma";
-import { UserRole } from "@prisma/client";
 import { uploadImageFromUrl, STORAGE_BUCKETS } from "@/lib/supabase/storage";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
-    const session = await auth();
-    if (!session?.user || session.user.role !== UserRole.ADMIN) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+    await requireAdmin();
 
     // Get the 5 most recent songs with cover images
     const songs = await prisma.song.findMany({

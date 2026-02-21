@@ -2,16 +2,13 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import Image from "next/image";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { formatDate, formatNumber } from "@/lib/utils";
-import { Music2, Plus, Clock, Video, TrendingUp, Loader2 } from "lucide-react";
-import { SongDetailsModal } from "@/components/music/song-details-modal";
-import { toast } from "sonner";
-
-// Force dynamic rendering for Cloudflare Pages
-export const dynamic = 'force-dynamic';
+import { formatNumber } from "@/lib/utils";
+import { Music2, Plus, Clock, Video, TrendingUp, Loader2, AlertCircle } from "lucide-react";
 
 interface Song {
   id: string;
@@ -38,10 +35,10 @@ function formatDuration(seconds: number): string {
 }
 
 export default function MySongsPage() {
+  const router = useRouter();
   const [songs, setSongs] = useState<Song[]>([]);
   const [loading, setLoading] = useState(true);
-  const [selectedSong, setSelectedSong] = useState<Song | null>(null);
-  const [modalOpen, setModalOpen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     fetchSongs();
@@ -49,32 +46,35 @@ export default function MySongsPage() {
 
   const fetchSongs = async () => {
     try {
+      setError(null);
       const response = await fetch("/api/songs");
-      if (!response.ok) throw new Error("Failed to fetch songs");
+      if (!response.ok) throw new Error("Şarkılar yüklenirken bir hata oluştu");
       const json = await response.json();
       setSongs(json.data || []);
-    } catch (error) {
-      console.error("Error fetching songs:", error);
+    } catch (err) {
+      console.error("Error fetching songs:", err);
+      setError(err instanceof Error ? err.message : "Şarkılar yüklenemedi");
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleSongClick = (song: Song) => {
-    setSelectedSong(song);
-    setModalOpen(true);
-  };
-
-  const handleSongDelete = (songId: string) => {
-    // Remove song from list
-    setSongs(songs.filter(s => s.id !== songId));
-    toast.success("Şarkı listeden kaldırıldı");
   };
 
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[400px] gap-4">
+        <AlertCircle className="h-10 w-10 text-destructive" />
+        <p className="text-muted-foreground">{error}</p>
+        <Button variant="outline" onClick={() => { setLoading(true); fetchSongs(); }}>
+          Tekrar Dene
+        </Button>
       </div>
     );
   }
@@ -118,16 +118,19 @@ export default function MySongsPage() {
               <Card
                 key={song.id}
                 className="group cursor-pointer transition-all hover:shadow-md hover:scale-[1.02]"
-                onClick={() => handleSongClick(song)}
+                onClick={() => router.push(`/artist/songs/${song.id}`)}
               >
                 <CardContent className="p-0">
                   {/* Cover Image */}
                   <div className="relative aspect-square overflow-hidden rounded-t-lg bg-muted">
                     {song.coverImage ? (
-                      <img
+                      <Image
                         src={song.coverImage}
                         alt={song.title}
-                        className="h-full w-full object-cover transition-transform group-hover:scale-105"
+                        fill
+                        sizes="(max-width: 768px) 50vw, (max-width: 1024px) 33vw, 20vw"
+                        className="object-cover transition-transform group-hover:scale-105"
+                        unoptimized={song.coverImage.includes("tiktokcdn")}
                       />
                     ) : (
                       <div className="flex h-full items-center justify-center">
@@ -179,13 +182,6 @@ export default function MySongsPage() {
         </div>
       )}
 
-      {/* Song Details Modal */}
-      <SongDetailsModal
-        song={selectedSong}
-        open={modalOpen}
-        onOpenChange={setModalOpen}
-        onDelete={handleSongDelete}
-      />
     </div>
   );
 }

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { Check, X } from "lucide-react";
+import { ConfirmActionModal } from "@/components/admin/confirm-action-modal";
 
 interface TransactionApprovalButtonProps {
   transactionId: string;
@@ -17,8 +18,10 @@ export function TransactionApprovalButton({
 }: TransactionApprovalButtonProps) {
   const router = useRouter();
   const [isLoading, setIsLoading] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
 
-  const handleClick = async () => {
+  const handleAction = async () => {
+    setShowConfirm(false);
     setIsLoading(true);
 
     try {
@@ -41,31 +44,52 @@ export function TransactionApprovalButton({
     }
   };
 
+  const label = action === "approve" ? "Onayla" : "Reddet";
+  const loadingLabel = action === "approve" ? "Onaylanıyor..." : "Reddediliyor...";
+
   if (action === "approve") {
     return (
-      <Button
-        onClick={handleClick}
-        disabled={isLoading}
-        className="gap-2"
-        size="sm"
-      >
-        <Check className="h-4 w-4" />
-        {isLoading ? "Onaylanıyor..." : "Onayla"}
-      </Button>
+      <>
+        <Button
+          onClick={() => setShowConfirm(true)}
+          disabled={isLoading}
+          className="gap-2"
+          size="sm"
+        >
+          <Check className="h-4 w-4" />
+          {isLoading ? loadingLabel : label}
+        </Button>
+        <ConfirmActionModal
+          isOpen={showConfirm}
+          onConfirm={handleAction}
+          onCancel={() => setShowConfirm(false)}
+          title="İşlemi Onayla"
+          description="Bu işlemi onaylamak için şifrenizi girin."
+        />
+      </>
     );
   }
 
   return (
-    <Button
-      onClick={handleClick}
-      disabled={isLoading}
-      variant="destructive"
-      className="gap-2"
-      size="sm"
-    >
-      <X className="h-4 w-4" />
-      {isLoading ? "Reddediliyor..." : "Reddet"}
-    </Button>
+    <>
+      <Button
+        onClick={() => setShowConfirm(true)}
+        disabled={isLoading}
+        variant="destructive"
+        className="gap-2"
+        size="sm"
+      >
+        <X className="h-4 w-4" />
+        {isLoading ? loadingLabel : label}
+      </Button>
+      <ConfirmActionModal
+        isOpen={showConfirm}
+        onConfirm={handleAction}
+        onCancel={() => setShowConfirm(false)}
+        title="İşlemi Reddet"
+        description="Bu işlemi reddetmek için şifrenizi girin."
+      />
+    </>
   );
 }
 

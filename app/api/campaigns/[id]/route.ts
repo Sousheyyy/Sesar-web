@@ -8,27 +8,57 @@ export const dynamic = 'force-dynamic';
 
 export async function GET(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const session = await auth();
+    if (!session?.user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const { id } = await params;
     const campaign = await prisma.campaign.findUnique({
-      where: { id: params.id },
+      where: { id },
       include: {
-        song: true,
+        song: {
+          select: {
+            id: true,
+            title: true,
+            coverImage: true,
+            tiktokUrl: true,
+            tiktokMusicId: true,
+            authorName: true,
+            duration: true,
+            videoCount: true,
+          },
+        },
         artist: {
           select: {
             id: true,
             name: true,
-            email: true,
           },
         },
         submissions: {
-          include: {
+          take: 50,
+          select: {
+            id: true,
+            status: true,
+            tiktokUrl: true,
+            lastViewCount: true,
+            lastLikeCount: true,
+            lastShareCount: true,
+            lastCommentCount: true,
+            totalPoints: true,
+            sharePercent: true,
+            estimatedEarnings: true,
+            totalEarnings: true,
+            createdAt: true,
             creator: {
               select: {
                 id: true,
                 name: true,
                 tiktokHandle: true,
+                avatar: true,
               },
             },
           },
@@ -51,6 +81,14 @@ export async function GET(
       );
     }
 
+    // Only the campaign owner or admin can view full details
+    if (campaign.artistId !== session.user.id && session.user.role !== UserRole.ADMIN) {
+      return NextResponse.json(
+        { error: "Forbidden" },
+        { status: 403 }
+      );
+    }
+
     return NextResponse.json(campaign);
   } catch (error) {
     console.error("Campaign fetch error:", error);
@@ -63,9 +101,10 @@ export async function GET(
 
 export async function PATCH(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { id } = await params;
     const session = await auth();
 
     if (!session?.user) {
@@ -73,7 +112,7 @@ export async function PATCH(
     }
 
     const campaign = await prisma.campaign.findUnique({
-      where: { id: params.id },
+      where: { id },
     });
 
     if (!campaign) {
@@ -105,7 +144,7 @@ export async function PATCH(
     };
 
     const updatedCampaign = await prisma.campaign.update({
-      where: { id: params.id },
+      where: { id },
       data: Object.fromEntries(
         Object.entries(allowedUpdates).filter(([_, v]) => v !== undefined)
       ),
@@ -132,9 +171,10 @@ export async function PATCH(
 
 export async function DELETE(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { id } = await params;
     const session = await auth();
 
     if (!session?.user) {
@@ -142,9 +182,14 @@ export async function DELETE(
     }
 
     const campaign = await prisma.campaign.findUnique({
-      where: { id: params.id },
-      include: {
-        submissions: true,
+      where: { id },
+      select: {
+        id: true,
+        title: true,
+        artistId: true,
+        status: true,
+        remainingBudget: true,
+        _count: { select: { submissions: true } },
       },
     });
 
@@ -166,33 +211,30 @@ export async function DELETE(
       );
     }
 
-    // Refund remaining budget if campaign has submissions
-    if (campaign.submissions.length > 0 && Number(campaign.remainingBudget) > 0) {
+    // Refund remaining budget and delete campaign
+    const refundAmount = Number(campaign.remainingBudget);
+    if (refundAmount > 0) {
       await prisma.$transaction([
-        // Refund remaining budget
         prisma.user.update({
           where: { id: campaign.artistId },
-          data: { balance: { increment: campaign.remainingBudget } },
+          data: { balance: { increment: refundAmount } },
         }),
-        // Create refund transaction
         prisma.transaction.create({
           data: {
             userId: campaign.artistId,
             type: "REFUND",
-            amount: campaign.remainingBudget,
+            amount: refundAmount,
             status: "COMPLETED",
-            description: `Campaign cancelled: ${campaign.title}`,
+            description: `Kampanya İptal: ${campaign.title}`,
           },
         }),
-        // Delete campaign
         prisma.campaign.delete({
-          where: { id: params.id },
+          where: { id },
         }),
       ]);
     } else {
-      // Just delete if no submissions
       await prisma.campaign.delete({
-        where: { id: params.id },
+        where: { id },
       });
     }
 
@@ -205,6 +247,3 @@ export async function DELETE(
     );
   }
 }
-
-
-

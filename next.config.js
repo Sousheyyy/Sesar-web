@@ -33,69 +33,66 @@ const nextConfig = {
     ],
     formats: ['image/avif', 'image/webp'],
   },
+  // Prisma must be externalized for OpenNext/Cloudflare Workers
+  serverExternalPackages: ['@prisma/client', '.prisma/client'],
   experimental: {
-    serverActions: {
-      bodySizeLimit: '10mb',
-    },
-    optimizePackageImports: ['lucide-react', '@radix-ui/react-icons'],
-    // Exclude these packages from webpack bundling (they're server-only)
-    serverComponentsExternalPackages: [
-      'tiktok-scraper-ts',
-      'playwright-core',
-      'playwright-chromium',
-      'chromium-bidi',
-      'tiktok-signature',
-      'electron',
+    optimizePackageImports: [
+      'lucide-react',
+      '@radix-ui/react-icons',
+      'recharts',
+      'date-fns',
+      '@radix-ui/react-dialog',
+      '@radix-ui/react-select',
+      '@radix-ui/react-dropdown-menu',
+      '@radix-ui/react-popover',
+      '@radix-ui/react-tabs',
+      '@radix-ui/react-avatar',
     ],
+  },
+  // Disable ETag to prevent 304 caching issues with RSC on Cloudflare CDN
+  generateEtags: false,
+  // Prevent Cloudflare CDN from caching dynamic responses
+  async headers() {
+    return [
+      // RSC responses — never cache across deploys
+      {
+        source: '/:path*',
+        has: [{ type: 'header', key: 'rsc' }],
+        headers: [
+          { key: 'CDN-Cache-Control', value: 'no-store' },
+        ],
+      },
+      // API routes — never cache (prevents stale error pages)
+      {
+        source: '/api/:path*',
+        headers: [
+          { key: 'Cache-Control', value: 'no-store, no-cache, must-revalidate' },
+          { key: 'CDN-Cache-Control', value: 'no-store' },
+        ],
+      },
+    ];
   },
   // Production optimizations
   compress: true,
   poweredByHeader: false,
   reactStrictMode: true,
-  swcMinify: true,
-  // Disable ESLint during build to avoid compatibility issues with ESLint 9
-  eslint: {
-    ignoreDuringBuilds: true,
-  },
-  // Disable TypeScript errors during build (optional, but helpful for Cloudflare)
   typescript: {
     ignoreBuildErrors: false,
   },
-  // OpenNext-compatible output configuration
-  output: 'standalone',
-  // Generate static pages configuration - skip error pages static generation
   generateBuildId: async () => {
     return 'build-' + Date.now();
   },
-  // Exclude cache directories from build output for Cloudflare Pages
-  // This prevents large cache files from being included in the deployment
   distDir: '.next',
+  // Silence Turbopack warning in Next.js 16 (turbopack handles fs/net/tls natively)
+  turbopack: {},
   // Webpack config to exclude server-only packages from client bundle
   webpack: (config, { isServer }) => {
     if (!isServer) {
-      // Completely ignore these server-only modules on client side
-      config.resolve.alias = {
-        ...config.resolve.alias,
-        'tiktok-scraper-ts': false,
-        'playwright-core': false,
-        'playwright-chromium': false,
-        'chromium-bidi': false,
-        'tiktok-signature': false,
-      };
-      
       config.resolve.fallback = {
         ...config.resolve.fallback,
         fs: false,
         net: false,
         tls: false,
-        crypto: false,
-        stream: false,
-        http: false,
-        https: false,
-        zlib: false,
-        path: false,
-        os: false,
-        child_process: false,
       };
     }
     return config;

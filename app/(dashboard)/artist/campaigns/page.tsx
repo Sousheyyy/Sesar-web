@@ -7,7 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatCurrency, formatDate, formatNumber } from "@/lib/utils";
-import { Music2, Plus, Calendar, Users, TrendingUp, Eye, Heart, Share2, Target } from "lucide-react";
+import { Music2, Plus, Calendar, Users, TrendingUp, Eye, Heart, Share2, Clock } from "lucide-react";
 
 // Force dynamic rendering for Cloudflare Pages
 export const dynamic = 'force-dynamic';
@@ -15,81 +15,29 @@ export const dynamic = 'force-dynamic';
 export default async function ArtistCampaignsPage() {
   const user = await requireArtist();
 
-  // Fetch artist's active campaigns
-  const activeCampaigns = await prisma.campaign.findMany({
-    where: {
-      artistId: user.id,
-      status: "ACTIVE",
-    },
-    include: {
-      song: true,
-      _count: {
-        select: {
-          submissions: true,
-        },
-      },
-      submissions: {
-        select: {
-          lastViewCount: true,
-          lastLikeCount: true,
-          lastShareCount: true,
-        },
-      },
-    },
-    orderBy: {
-      createdAt: "desc",
-    },
-  });
-
-  // Fetch artist's ended campaigns
-  const endedCampaigns = await prisma.campaign.findMany({
-    where: {
-      artistId: user.id,
-      status: {
-        in: ["COMPLETED", "CANCELLED"],
-      },
-    },
-    include: {
-      song: true,
-      _count: {
-        select: {
-          submissions: true,
-        },
-      },
-      submissions: {
-        select: {
-          lastViewCount: true,
-          lastLikeCount: true,
-          lastShareCount: true,
-        },
-      },
-    },
-    orderBy: {
-      completedAt: "desc",
-    },
-  });
-
-  // Fetch all marketplace campaigns (from all artists)
-  const allMarketplaceCampaigns = await prisma.campaign.findMany({
-    where: {
-      status: "ACTIVE",
-      remainingBudget: {
-        gt: 0,
-      },
-    },
-    include: {
-      song: true,
-      artist: {
+  // Single query — filter in memory for tabs (select only needed fields)
+  const allMyCampaigns = await prisma.campaign.findMany({
+    where: { artistId: user.id },
+    select: {
+      id: true,
+      title: true,
+      status: true,
+      totalBudget: true,
+      remainingBudget: true,
+      commissionPercent: true,
+      createdAt: true,
+      startDate: true,
+      endDate: true,
+      song: {
         select: {
           id: true,
-          name: true,
-          avatar: true,
+          title: true,
+          coverImage: true,
+          authorName: true,
         },
       },
       _count: {
-        select: {
-          submissions: true,
-        },
+        select: { submissions: true },
       },
       submissions: {
         select: {
@@ -99,10 +47,14 @@ export default async function ArtistCampaignsPage() {
         },
       },
     },
-    orderBy: {
-      createdAt: "desc",
-    },
+    orderBy: { createdAt: "desc" },
   });
+
+  const activeCampaigns = allMyCampaigns.filter((c) => c.status === "ACTIVE");
+  const pendingCampaigns = allMyCampaigns.filter((c) => c.status === "PENDING_APPROVAL");
+  const endedCampaigns = allMyCampaigns.filter((c) =>
+    ["COMPLETED", "CANCELLED", "REJECTED"].includes(c.status)
+  );
 
   // Helper function to calculate total engagement
   const calculateEngagement = (submissions: Array<{ lastViewCount: number | null; lastLikeCount: number | null; lastShareCount: number | null }>) => {
@@ -114,10 +66,10 @@ export default async function ArtistCampaignsPage() {
   };
 
   // Campaign Card Component
-  const CampaignCard = ({ campaign, isMarketplace = false }: { campaign: any; isMarketplace?: boolean }) => {
+  const CampaignCard = ({ campaign }: { campaign: any }) => {
     const engagement = calculateEngagement(campaign.submissions);
     const maxEarnings = (Number(campaign.totalBudget) * (100 - (campaign.commissionPercent || 20)) / 100) * 0.4;
-    
+
     return (
       <Link key={campaign.id} href={`/artist/campaigns/${campaign.id}`}>
         <Card className="group hover:shadow-lg hover:border-purple-500/30 transition-all duration-300 cursor-pointer h-full bg-[#0A0A0B]/40 border-white/10 backdrop-blur-sm overflow-hidden">
@@ -132,6 +84,7 @@ export default async function ArtistCampaignsPage() {
                     fill
                     sizes="80px"
                     className="object-cover"
+                    unoptimized={campaign.song.coverImage.includes('tiktokcdn')}
                   />
                 ) : (
                   <div className="flex h-full items-center justify-center">
@@ -153,6 +106,8 @@ export default async function ArtistCampaignsPage() {
                         ? "secondary"
                         : campaign.status === "PENDING_APPROVAL"
                         ? "warning"
+                        : campaign.status === "PAUSED"
+                        ? "warning"
                         : "destructive"
                     }
                     className="shrink-0"
@@ -162,16 +117,12 @@ export default async function ArtistCampaignsPage() {
                     {campaign.status === "COMPLETED" && "TAMAMLANDI"}
                     {campaign.status === "PAUSED" && "DURAKLATILDI"}
                     {campaign.status === "CANCELLED" && "İPTAL"}
+                    {campaign.status === "REJECTED" && "REDDEDİLDİ"}
                   </Badge>
                 </div>
                 <CardDescription className="line-clamp-1 text-white/60">
-                  {campaign.song.authorName || (isMarketplace ? campaign.artist.name : campaign.title)}
+                  {campaign.song.authorName || campaign.title}
                 </CardDescription>
-                {isMarketplace && (
-                  <p className="text-xs text-white/40 mt-1 line-clamp-1">
-                    {campaign.title}
-                  </p>
-                )}
               </div>
             </div>
           </CardHeader>
@@ -243,13 +194,41 @@ export default async function ArtistCampaignsPage() {
     );
   };
 
+  const renderCampaignGrid = (campaigns: typeof allMyCampaigns, emptyIcon: React.ReactNode, emptyTitle: string, emptyDesc: string, showCreateButton = false) => {
+    if (campaigns.length === 0) {
+      return (
+        <Card className="bg-white/5 border-white/10">
+          <CardContent className="flex flex-col items-center justify-center py-12">
+            {emptyIcon}
+            <h3 className="text-lg font-semibold mb-2 text-white">{emptyTitle}</h3>
+            <p className="text-white/60 text-center mb-4">{emptyDesc}</p>
+            {showCreateButton && (
+              <Link href="/artist/campaigns/new">
+                <Button className="bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700">
+                  Kampanya Oluştur
+                </Button>
+              </Link>
+            )}
+          </CardContent>
+        </Card>
+      );
+    }
+    return (
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+        {campaigns.map((campaign) => (
+          <CampaignCard key={campaign.id} campaign={campaign} />
+        ))}
+      </div>
+    );
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-3xl font-bold tracking-tight text-white">Kampanyalarım</h2>
           <p className="text-white/60">
-            Tanıtım kampanyalarınızı yönetin ve tüm aktif kampanyaları keşfedin
+            Tanıtım kampanyalarınızı yönetin ve takip edin
           </p>
         </div>
         <Link href="/artist/campaigns/new">
@@ -260,93 +239,73 @@ export default async function ArtistCampaignsPage() {
         </Link>
       </div>
 
-      <Tabs defaultValue="aktif" className="w-full">
-        <TabsList className="grid w-full max-w-md grid-cols-3 bg-white/5 border border-white/10">
-          <TabsTrigger 
-            value="aktif" 
+      <Tabs defaultValue="tumu" className="w-full">
+        <TabsList className="grid w-full max-w-lg grid-cols-4 bg-white/5 border border-white/10">
+          <TabsTrigger
+            value="tumu"
+            className="data-[state=active]:bg-purple-600 data-[state=active]:text-white"
+          >
+            Tümü ({allMyCampaigns.length})
+          </TabsTrigger>
+          <TabsTrigger
+            value="aktif"
             className="data-[state=active]:bg-purple-600 data-[state=active]:text-white"
           >
             Aktif ({activeCampaigns.length})
           </TabsTrigger>
-          <TabsTrigger 
+          <TabsTrigger
+            value="bekleyen"
+            className="data-[state=active]:bg-purple-600 data-[state=active]:text-white"
+          >
+            Bekleyen ({pendingCampaigns.length})
+          </TabsTrigger>
+          <TabsTrigger
             value="sonlanan"
             className="data-[state=active]:bg-purple-600 data-[state=active]:text-white"
           >
             Sonlanan ({endedCampaigns.length})
           </TabsTrigger>
-          <TabsTrigger 
-            value="tumu"
-            className="data-[state=active]:bg-purple-600 data-[state=active]:text-white"
-          >
-            Tümü ({allMarketplaceCampaigns.length})
-          </TabsTrigger>
         </TabsList>
+
+        {/* Tümü Tab */}
+        <TabsContent value="tumu" className="mt-6">
+          {renderCampaignGrid(
+            allMyCampaigns,
+            <Music2 className="h-12 w-12 text-white/20 mb-4" />,
+            "Henüz kampanya oluşturmadınız",
+            "Müziğinizi tanıtmaya başlamak için ilk kampanyanızı oluşturun",
+            true
+          )}
+        </TabsContent>
 
         {/* Aktif Tab */}
         <TabsContent value="aktif" className="mt-6">
-          {activeCampaigns.length === 0 ? (
-            <Card className="bg-white/5 border-white/10">
-              <CardContent className="flex flex-col items-center justify-center py-12">
-                <TrendingUp className="h-12 w-12 text-white/20 mb-4" />
-                <h3 className="text-lg font-semibold mb-2 text-white">Aktif kampanya yok</h3>
-                <p className="text-white/60 text-center mb-4">
-                  Müziğinizi tanıtmaya başlamak için ilk kampanyanızı oluşturun
-                </p>
-                <Link href="/artist/campaigns/new">
-                  <Button className="bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700">
-                    Kampanya Oluştur
-                  </Button>
-                </Link>
-              </CardContent>
-            </Card>
-          ) : (
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-              {activeCampaigns.map((campaign) => (
-                <CampaignCard key={campaign.id} campaign={campaign} />
-              ))}
-            </div>
+          {renderCampaignGrid(
+            activeCampaigns,
+            <TrendingUp className="h-12 w-12 text-white/20 mb-4" />,
+            "Aktif kampanya yok",
+            "Aktif kampanyalarınız burada görünecek",
+            true
+          )}
+        </TabsContent>
+
+        {/* Bekleyen Tab */}
+        <TabsContent value="bekleyen" className="mt-6">
+          {renderCampaignGrid(
+            pendingCampaigns,
+            <Clock className="h-12 w-12 text-white/20 mb-4" />,
+            "Onay bekleyen kampanya yok",
+            "Onay bekleyen kampanyalarınız burada görünecek"
           )}
         </TabsContent>
 
         {/* Sonlanan Tab */}
         <TabsContent value="sonlanan" className="mt-6">
-          {endedCampaigns.length === 0 ? (
-            <Card className="bg-white/5 border-white/10">
-              <CardContent className="flex flex-col items-center justify-center py-12">
-                <Target className="h-12 w-12 text-white/20 mb-4" />
-                <h3 className="text-lg font-semibold mb-2 text-white">Sonlanan kampanya yok</h3>
-                <p className="text-white/60 text-center">
-                  Tamamlanmış veya iptal edilmiş kampanyalarınız burada görünecek
-                </p>
-              </CardContent>
-            </Card>
-          ) : (
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-              {endedCampaigns.map((campaign) => (
-                <CampaignCard key={campaign.id} campaign={campaign} />
-              ))}
-            </div>
-          )}
-        </TabsContent>
-
-        {/* Tümü (All Marketplace) Tab */}
-        <TabsContent value="tumu" className="mt-6">
-          {allMarketplaceCampaigns.length === 0 ? (
-            <Card className="bg-white/5 border-white/10">
-              <CardContent className="flex flex-col items-center justify-center py-12">
-                <Music2 className="h-12 w-12 text-white/20 mb-4" />
-                <h3 className="text-lg font-semibold mb-2 text-white">Aktif kampanya yok</h3>
-                <p className="text-white/60 text-center">
-                  Şu anda platformda aktif kampanya bulunmuyor
-                </p>
-              </CardContent>
-            </Card>
-          ) : (
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-              {allMarketplaceCampaigns.map((campaign) => (
-                <CampaignCard key={campaign.id} campaign={campaign} isMarketplace={true} />
-              ))}
-            </div>
+          {renderCampaignGrid(
+            endedCampaigns,
+            <Calendar className="h-12 w-12 text-white/20 mb-4" />,
+            "Sonlanan kampanya yok",
+            "Tamamlanmış, iptal edilmiş veya reddedilmiş kampanyalarınız burada görünecek"
           )}
         </TabsContent>
       </Tabs>

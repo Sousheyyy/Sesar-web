@@ -4,6 +4,16 @@ import { prisma } from "@/lib/prisma";
 import { UserRole } from "@prisma/client";
 import { logApiCallSimple, extractEndpoint } from "@/lib/api-logger-simple";
 import { getCommissionFromBudget, MIN_BUDGET_TL, MAX_BUDGET_TL, MIN_DURATION_DAYS, MAX_DURATION_DAYS } from "@/server/lib/tierUtils";
+import { z } from "zod";
+
+const createCampaignSchema = z.object({
+  songId: z.string().min(1, "Şarkı seçilmelidir"),
+  title: z.string().min(3, "Başlık en az 3 karakter olmalı").max(100, "Başlık en fazla 100 karakter olabilir"),
+  description: z.string().max(1000, "Açıklama en fazla 1000 karakter olabilir").optional().nullable(),
+  totalBudget: z.number().positive("Bütçe pozitif bir sayı olmalı"),
+  durationDays: z.number().int("Süre tam sayı olmalı").positive("Süre pozitif olmalı"),
+  minVideoDuration: z.number().int().positive().optional().nullable(),
+});
 
 // Force dynamic rendering for Cloudflare Pages
 export const dynamic = 'force-dynamic';
@@ -23,53 +33,56 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const {
-      songId,
-      title,
-      description,
-      totalBudget,
-      durationDays,
-      minVideoDuration,
-    } = await req.json();
+    const body = await req.json();
+    const parsed = createCampaignSchema.safeParse(body);
 
-    if (!songId || !title || !totalBudget) {
+    if (!parsed.success) {
+      const firstError = parsed.error.issues[0]?.message ?? "Geçersiz veri";
       return NextResponse.json(
-        { error: "Missing required fields" },
+        { error: firstError },
         { status: 400 }
       );
     }
+
+    const { songId, title, description, totalBudget, durationDays, minVideoDuration } = parsed.data;
+
+    // Read dynamic limits from SystemSettings (fallback to hardcoded defaults)
+    const settingsRows = await prisma.systemSettings.findMany({
+      where: { key: { in: ["min_budget", "max_budget", "min_duration", "max_duration", "commission_percent"] } },
+    });
+    const settingsMap: Record<string, string> = {};
+    for (const row of settingsRows) settingsMap[row.key] = row.value;
+
+    const minBudget = parseInt(settingsMap.min_budget) || MIN_BUDGET_TL;
+    const maxBudget = parseInt(settingsMap.max_budget) || MAX_BUDGET_TL;
+    const minDuration = parseInt(settingsMap.min_duration) || MIN_DURATION_DAYS;
+    const maxDuration = parseInt(settingsMap.max_duration) || MAX_DURATION_DAYS;
 
     // Validate budget
-    if (totalBudget < MIN_BUDGET_TL) {
+    if (totalBudget < minBudget) {
       return NextResponse.json(
-        { error: `Minimum campaign budget is ₺${MIN_BUDGET_TL.toLocaleString()}` },
+        { error: `Minimum campaign budget is ₺${minBudget.toLocaleString()}` },
         { status: 400 }
       );
     }
 
-    if (totalBudget > MAX_BUDGET_TL) {
+    if (totalBudget > maxBudget) {
       return NextResponse.json(
-        { error: `Maximum campaign budget is ₺${MAX_BUDGET_TL.toLocaleString()}` },
+        { error: `Maximum campaign budget is ₺${maxBudget.toLocaleString()}` },
         { status: 400 }
       );
     }
 
     // Validate duration
-    if (!durationDays || durationDays < MIN_DURATION_DAYS || durationDays > MAX_DURATION_DAYS) {
+    if (!durationDays || durationDays < minDuration || durationDays > maxDuration) {
       return NextResponse.json(
-        { error: `Campaign duration must be between ${MIN_DURATION_DAYS} and ${MAX_DURATION_DAYS} days` },
+        { error: `Campaign duration must be between ${minDuration} and ${maxDuration} days` },
         { status: 400 }
       );
     }
 
-    // Auto-calculate commission from budget bracket
-    const commissionPercent = getCommissionFromBudget(totalBudget);
-    if (commissionPercent === null) {
-      return NextResponse.json(
-        { error: "Invalid budget amount" },
-        { status: 400 }
-      );
-    }
+    // Commission: read from DB settings, fallback to budget bracket calculation
+    const commissionPercent = parseInt(settingsMap.commission_percent) || getCommissionFromBudget(totalBudget) || 20;
 
     // Check if user has sufficient balance
     const user = await prisma.user.findUnique({
@@ -173,7 +186,7 @@ export async function GET(req: NextRequest) {
     let where: any = {};
 
     if (!session?.user) {
-      // Public campaigns for marketplace
+      // Public campaigns (unauthenticated users see active only)
       where.status = "ACTIVE";
     } else {
       // User's campaigns

@@ -54,7 +54,7 @@ export class CalculationService {
     }
 
     // --- Refund percentages ---
-    static readonly INSURANCE_REFUND_PERCENT = 0.95;
+    // Insurance refund = 100% of net budget (prize pool after commission). Commission is always kept.
     static readonly ARTIST_CANCEL_REFUND_PERCENT = 1.00;
     static readonly ADMIN_REJECT_REFUND_PERCENT = 1.00;
 
@@ -563,7 +563,12 @@ export class CalculationService {
         failedChecks: string[],
         metrics: { totalSubmissions: number; totalPoints: number; totalViews: number }
     ): Promise<DistributionResult> {
-        const refundAmount = Math.round(Number(campaign.totalBudget) * this.INSURANCE_REFUND_PERCENT * 100) / 100;
+        // Refund = 100% of net budget (prize pool). Commission is always kept by the platform.
+        const { netBudgetTL } = this.calculateNetBudget(
+            Number(campaign.totalBudget),
+            campaign.commissionPercent
+        );
+        const refundAmount = Math.round(netBudgetTL * 100) / 100;
 
         await tx.user.update({
             where: { id: campaign.artistId },

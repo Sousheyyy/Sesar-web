@@ -1,18 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
+import { requireAdmin } from "@/lib/auth-utils";
 import { prisma } from "@/lib/prisma";
-import { UserRole, TransactionType, TransactionStatus } from "@prisma/client";
+import { TransactionType, TransactionStatus, UserRole } from "@prisma/client";
 
 // Force dynamic rendering for Cloudflare Pages
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
   try {
-    const session = await auth();
-
-    if (!session?.user || session.user.role !== UserRole.ADMIN) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+    await requireAdmin();
 
     const { searchParams } = new URL(req.url);
     const type = searchParams.get("type"); // "revenue" | "payouts" | "platformFee" | "totalBank"

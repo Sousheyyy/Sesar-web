@@ -7,7 +7,7 @@ import { UserRole } from "@prisma/client";
  * Bridges the gap between Supabase Auth and our Prisma User profiles.
  */
 export async function auth() {
-  const supabase = createClient();
+  const supabase = await createClient();
 
   try {
     // Use getUser() to validate the auth token on the server

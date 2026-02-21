@@ -1,21 +1,39 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import {
   Music2,
   TrendingUp,
-  Settings,
   Users,
   FileText,
   BarChart3,
   User,
-  Sparkles
+  LayoutDashboard,
+  Wallet,
+  Landmark,
+  MessageSquare,
+  Send,
+  Settings,
+  LogOut,
 } from "lucide-react";
 import { UserRole } from "@prisma/client";
+import { toast } from "sonner";
+import { createClient } from "@/lib/supabase/client";
 
 interface SidebarProps {
   role: UserRole;
@@ -27,11 +45,15 @@ const navigation = {
     { name: "Kullanıcılar", href: "/admin/users", icon: Users },
     { name: "Kampanyalar", href: "/admin/campaigns", icon: Music2 },
     { name: "İşlemler", href: "/admin/transactions", icon: FileText },
+    { name: "Banka", href: "/admin/bank", icon: Landmark },
+    { name: "Ayarlar", href: "/admin/settings", icon: Settings },
     { name: "Profil", href: "/profile", icon: User },
   ],
   [UserRole.ARTIST]: [
+    { name: "Ana Sayfa", href: "/artist", icon: LayoutDashboard },
     { name: "Şarkılarım", href: "/artist/songs", icon: Music2 },
     { name: "Kampanyalarım", href: "/artist/campaigns", icon: TrendingUp },
+    { name: "Cüzdan", href: "/artist/wallet", icon: Wallet },
     { name: "Profil", href: "/profile", icon: User },
   ],
 };
@@ -39,7 +61,58 @@ const navigation = {
 export function Sidebar({ role }: SidebarProps) {
   const pathname = usePathname();
   const links = navigation[role] || navigation[UserRole.ARTIST];
-  const homeLink = role === UserRole.ADMIN ? "/admin/analytics" : "/artist/songs";
+  const homeLink = role === UserRole.ADMIN ? "/admin/analytics" : "/artist";
+
+  const [contactOpen, setContactOpen] = useState(false);
+  const [contactSubject, setContactSubject] = useState("");
+  const [contactMessage, setContactMessage] = useState("");
+
+  const [contactLoading, setContactLoading] = useState(false);
+  const [logoutLoading, setLogoutLoading] = useState(false);
+
+  const handleLogout = async () => {
+    setLogoutLoading(true);
+    try {
+      const supabase = createClient();
+      await supabase.auth.signOut();
+      window.location.href = "/login";
+    } catch {
+      toast.error("Çıkış yapılırken bir hata oluştu");
+      setLogoutLoading(false);
+    }
+  };
+
+  const handleContact = async () => {
+    if (!contactSubject.trim() || !contactMessage.trim()) {
+      toast.error("Lütfen konu ve mesaj alanlarını doldurun");
+      return;
+    }
+
+    setContactLoading(true);
+    try {
+      const res = await fetch("/api/contact", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          subject: contactSubject.trim(),
+          message: contactMessage.trim(),
+        }),
+      });
+
+      if (!res.ok) {
+        throw new Error("Failed");
+      }
+
+      toast.success("Mesajınız başarıyla gönderildi!");
+      setContactSubject("");
+      setContactMessage("");
+      setContactOpen(false);
+    } catch {
+      toast.error("Mesaj gönderilemedi, lütfen tekrar deneyin");
+    } finally {
+      setContactLoading(false);
+    }
+  };
 
   return (
     <div className="flex h-full flex-col border-r border-white/5 bg-[#0A0A0B]/40 backdrop-blur-xl">
@@ -61,7 +134,9 @@ export function Sidebar({ role }: SidebarProps) {
 
       <nav className="flex-1 space-y-1 p-4">
         {links.map((link) => {
-          const isActive = pathname === link.href || pathname?.startsWith(link.href + "/");
+          const isActive = link.href === "/artist"
+            ? pathname === "/artist"
+            : (pathname === link.href || pathname?.startsWith(link.href + "/"));
           return (
             <Link key={link.href} href={link.href}>
               <Button
@@ -82,23 +157,63 @@ export function Sidebar({ role }: SidebarProps) {
         })}
       </nav>
 
-      <div className="p-4 mt-auto">
-        <div className="rounded-2xl bg-gradient-to-br from-purple-900/20 to-pink-900/20 border border-white/5 p-4 mb-4">
-          <div className="flex items-center gap-2 mb-2">
-            <Sparkles className="w-4 h-4 text-purple-400" />
-            <span className="text-sm font-medium text-white">Pro İpuçları</span>
-          </div>
-          <p className="text-xs text-zinc-400 leading-relaxed">
-            Daha fazla kazanmak için viral müzikleri takip edin.
-          </p>
-        </div>
+      <div className="p-4 mt-auto space-y-2">
+        <Dialog open={contactOpen} onOpenChange={setContactOpen}>
+          <DialogTrigger asChild>
+            <Button variant="ghost" className="w-full justify-start gap-3 text-zinc-400 hover:text-white hover:bg-white/5 h-12">
+              <MessageSquare className="h-5 w-5 text-zinc-500" />
+              Bize Ulaşın
+            </Button>
+          </DialogTrigger>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Bize Ulaşın</DialogTitle>
+              <DialogDescription>
+                Sorularınızı ve önerilerinizi bize iletin
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 pt-2">
+              <div className="space-y-2">
+                <Label htmlFor="sidebar-contact-subject">Konu</Label>
+                <Input
+                  id="sidebar-contact-subject"
+                  value={contactSubject}
+                  onChange={(e) => setContactSubject(e.target.value)}
+                  placeholder="Mesajınızın konusu"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="sidebar-contact-message">Mesaj</Label>
+                <Textarea
+                  id="sidebar-contact-message"
+                  value={contactMessage}
+                  onChange={(e) => setContactMessage(e.target.value)}
+                  placeholder="Mesajınızı yazın..."
+                  rows={4}
+                />
+              </div>
+              <div className="flex justify-end">
+                <Button
+                  onClick={handleContact}
+                  disabled={!contactSubject.trim() || !contactMessage.trim() || contactLoading}
+                >
+                  <Send className="mr-2 h-4 w-4" />
+                  {contactLoading ? "Gönderiliyor..." : "Mesaj Gönder"}
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
 
-        <Link href="/profile">
-          <Button variant="ghost" className="w-full justify-start gap-3 text-zinc-400 hover:text-white hover:bg-white/5 h-12">
-            <Settings className="h-5 w-5 text-zinc-500" />
-            Ayarlar
-          </Button>
-        </Link>
+        <Button
+          variant="ghost"
+          className="w-full justify-start gap-3 text-zinc-400 hover:text-red-400 hover:bg-red-500/5 h-12"
+          onClick={handleLogout}
+          disabled={logoutLoading}
+        >
+          <LogOut className="h-5 w-5 text-zinc-500" />
+          {logoutLoading ? "Çıkış yapılıyor..." : "Çıkış Yap"}
+        </Button>
       </div>
     </div>
   );

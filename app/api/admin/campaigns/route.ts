@@ -1,25 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
+import { requireAdmin } from "@/lib/auth-utils";
 import { prisma } from "@/lib/prisma";
-import { UserRole } from "@prisma/client";
 
 // Force dynamic rendering for Cloudflare Pages
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
   try {
-    const session = await auth();
-
-    if (!session?.user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
-    if (session.user.role !== UserRole.ADMIN) {
-      return NextResponse.json(
-        { error: "Admin access required" },
-        { status: 403 }
-      );
-    }
+    await requireAdmin();
 
     const { searchParams } = new URL(req.url);
     const status = searchParams.get("status");
@@ -31,19 +19,26 @@ export async function GET(req: NextRequest) {
 
     const campaigns = await prisma.campaign.findMany({
       where,
-      include: {
-        song: true,
+      select: {
+        id: true,
+        title: true,
+        status: true,
+        totalBudget: true,
+        remainingBudget: true,
+        commissionPercent: true,
+        durationDays: true,
+        createdAt: true,
+        startDate: true,
+        endDate: true,
+        artistId: true,
+        song: {
+          select: { id: true, title: true, coverImage: true, authorName: true },
+        },
         artist: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-          },
+          select: { id: true, name: true },
         },
         _count: {
-          select: {
-            submissions: true,
-          },
+          select: { submissions: true },
         },
       },
       orderBy: {
@@ -60,9 +55,5 @@ export async function GET(req: NextRequest) {
     );
   }
 }
-
-
-
-
 
 

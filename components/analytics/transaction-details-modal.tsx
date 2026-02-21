@@ -48,6 +48,7 @@ const TRANSACTION_TYPE_LABELS: Record<TransactionType, string> = {
   EARNING: "Kazanç",
   SPEND: "Harcama",
   REFUND: "İade",
+  ADJUSTMENT: "Düzenleme",
 };
 
 const STATUS_LABELS: Record<TransactionStatus, string> = {

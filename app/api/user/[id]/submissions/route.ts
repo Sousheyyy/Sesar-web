@@ -4,13 +4,14 @@ import { prisma } from "@/lib/prisma";
 import { UserRole } from "@prisma/client";
 
 // Force dynamic rendering for Cloudflare Pages
-export const dynamic = 'force-dynamic';
+export const dynamic = "force-dynamic";
 
 export async function GET(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { id } = await params;
     const session = await auth();
 
     if (!session?.user) {
@@ -23,59 +24,68 @@ export async function GET(
     }
 
     const { searchParams } = new URL(req.url);
-    const page = parseInt(searchParams.get("page") || "1");
-    const limit = Math.min(parseInt(searchParams.get("limit") || "20"), 100); // Max 100 per page
-    const skip = (page - 1) * limit;
+    const scope = searchParams.get("scope"); // "artist" = submissions TO this user's campaigns
 
-    const where = {
-      creatorId: params.id,
-    };
-
-    // Get total count for pagination
-    const total = await prisma.submission.count({ where });
+    const where =
+      scope === "artist"
+        ? { campaign: { artistId: id } }
+        : { creatorId: id };
 
     const submissions = await prisma.submission.findMany({
       where,
       select: {
         id: true,
         tiktokUrl: true,
-        totalEarnings: true,
-        contributionPercent: true,
+        tiktokVideoId: true,
         status: true,
+        verified: true,
+        verifiedAt: true,
+        videoDuration: true,
+        // Engagement metrics
+        lastViewCount: true,
+        lastLikeCount: true,
+        lastCommentCount: true,
+        lastShareCount: true,
+        // Earnings
+        totalEarnings: true,
+        estimatedEarnings: true,
+        payoutAmount: true,
+        contributionPercent: true,
+        // Timestamps
         createdAt: true,
+        lastCheckedAt: true,
+        // Campaign info
         campaign: {
           select: {
+            id: true,
             title: true,
+            status: true,
+          },
+        },
+        // Creator info (useful for artist scope)
+        creator: {
+          select: {
+            id: true,
+            name: true,
+            tiktokHandle: true,
+            tiktokAvatarUrl: true,
           },
         },
       },
-      orderBy: {
-        createdAt: "desc",
-      },
-      skip,
-      take: limit,
+      orderBy: { createdAt: "desc" },
     });
 
-    // Convert Decimal objects to numbers for JSON serialization
-    const serializedSubmissions = submissions.map((submission) => ({
-      ...submission,
-      totalEarnings: Number(submission.totalEarnings),
-      createdAt: submission.createdAt.toISOString(),
+    const serialized = submissions.map((s) => ({
+      ...s,
+      totalEarnings: Number(s.totalEarnings),
+      estimatedEarnings: Number(s.estimatedEarnings),
+      payoutAmount: s.payoutAmount ? Number(s.payoutAmount) : null,
+      createdAt: s.createdAt.toISOString(),
+      verifiedAt: s.verifiedAt?.toISOString() ?? null,
+      lastCheckedAt: s.lastCheckedAt?.toISOString() ?? null,
     }));
 
-    const totalPages = Math.ceil(total / limit);
-
-    return NextResponse.json({
-      data: serializedSubmissions,
-      pagination: {
-        page,
-        limit,
-        total,
-        totalPages,
-        hasNextPage: page < totalPages,
-        hasPreviousPage: page > 1,
-      },
-    });
+    return NextResponse.json({ data: serialized });
   } catch (error) {
     console.error("Error fetching user submissions:", error);
     return NextResponse.json(
@@ -84,4 +94,3 @@ export async function GET(
     );
   }
 }
-

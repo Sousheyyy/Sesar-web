@@ -6,46 +6,46 @@ import {
   Video,
   DollarSign,
   Shield,
-  Activity
+  Users,
+  Zap,
+  TrendingUp,
+  BarChart3,
+  Eye,
+  Music2,
 } from "lucide-react";
 import { TLIcon } from "@/components/icons/tl-icon";
-import { TransactionType, TransactionStatus, UserRole } from "@prisma/client";
-import { RevenuePayoutsComparison } from "@/components/analytics/revenue-payouts-comparison";
-import { ApiCallsChartClient } from "@/components/analytics/api-calls-chart-client";
-import { EngagementMetricsChart } from "@/components/analytics/engagement-metrics-chart";
+import { UserRole, CampaignStatus } from "@prisma/client";
 import { TopCampaignsTable } from "@/components/analytics/top-campaigns-table";
 import { AlertsSection } from "@/components/analytics/alerts-section";
-import { MetricCard } from "@/components/analytics/metric-card";
 import { FinancialMetricCard } from "@/components/analytics/financial-metric-card";
+import { MetricCard } from "@/components/analytics/metric-card";
+import { DailyFinancialChart } from "@/components/analytics/daily-financial-chart";
+import { DailyContentChart } from "@/components/analytics/daily-content-chart";
 import { DateRangeFilter } from "@/components/analytics/date-range-filter";
 import { Suspense } from "react";
+import { SectionErrorBoundary } from "@/components/admin/section-error-boundary";
 
 // Force dynamic rendering for Cloudflare Pages
-export const dynamic = 'force-dynamic';
-
-import {
-  groupTransactionsByDate,
-  groupEngagementByDate,
-} from "@/lib/analytics-utils";
+export const dynamic = "force-dynamic";
 
 interface AdminAnalyticsPageProps {
-  searchParams: { startDate?: string; endDate?: string };
+  searchParams: Promise<{ startDate?: string; endDate?: string }>;
 }
 
 export default async function AdminAnalyticsPage({ searchParams }: AdminAnalyticsPageProps) {
   await requireAdmin();
 
-  // Parse date filters
-  const startDate = searchParams.startDate ? new Date(searchParams.startDate) : null;
-  const endDate = searchParams.endDate ? new Date(searchParams.endDate) : null;
+  const resolvedSearchParams = await searchParams;
 
-  // Set end of day for endDate if provided
+  // Parse date filters
+  const startDate = resolvedSearchParams.startDate ? new Date(resolvedSearchParams.startDate) : null;
+  const endDate = resolvedSearchParams.endDate ? new Date(resolvedSearchParams.endDate) : null;
+
   const endDateFilter = endDate ? new Date(endDate) : null;
   if (endDateFilter) {
     endDateFilter.setHours(23, 59, 59, 999);
   }
 
-  // Build date filter for queries
   const dateFilter = startDate || endDateFilter ? {
     createdAt: {
       ...(startDate && { gte: startDate }),
@@ -53,223 +53,193 @@ export default async function AdminAnalyticsPage({ searchParams }: AdminAnalytic
     },
   } : {};
 
-  // Execute all queries sequentially to avoid connection pool exhaustion
-  // Count queries (filtered by date range if provided)
-  const totalUsers = await prisma.user.count({
-    where: dateFilter,
-  });
-  const totalCampaigns = await prisma.campaign.count({
-    where: dateFilter,
-  });
-  const totalSubmissions = await prisma.submission.count({
-    where: dateFilter,
-  });
-  const totalSongs = await prisma.song.count({
-    where: dateFilter,
-  });
-  const pendingTransactionsCount = await prisma.transaction.count({
-    where: {
-      status: "PENDING",
-      type: { in: ["DEPOSIT", "WITHDRAWAL"] },
-    },
-  });
-  const pendingCampaigns = await prisma.campaign.count({
-    where: { status: "PENDING_APPROVAL" },
-  });
-  const pendingTransactionsAmount = await prisma.transaction.aggregate({
-    where: {
-      status: "PENDING",
-      type: { in: ["DEPOSIT", "WITHDRAWAL"] },
-    },
-    _sum: { amount: true },
-  });
-
-  const pendingTransactions = pendingTransactionsCount;
-
-  // Data queries (limit to recent data for charts)
-  const users = await prisma.user.findMany({
-    where: dateFilter,
-    select: {
-      id: true,
-      role: true,
-      balance: true,
-      createdAt: true,
-      lastLoginAt: true,
-    },
-    orderBy: { createdAt: "desc" },
-  });
-
-  const transactions = await prisma.transaction.findMany({
-    where: {
-      status: "COMPLETED",
-      ...dateFilter,
-    },
-    select: {
-      type: true,
-      amount: true,
-      createdAt: true,
-    },
-    orderBy: { createdAt: "desc" },
-    take: 1000, // Limit for chart data
-  });
-
-  const campaigns = await prisma.campaign.findMany({
-    where: dateFilter,
-    select: {
-      id: true,
-      title: true,
-      status: true,
-      totalBudget: true,
-      commissionPercent: true,
-      createdAt: true,
-      submissions: {
-        where: dateFilter,
-        select: {
-          lastViewCount: true,
-          lastLikeCount: true,
-          lastCommentCount: true,
-          lastShareCount: true,
-          status: true,
+  // ─── Batch 1: KPI Aggregates (parallelized) ────────────────────
+  const [bankAggregate, payoutsAggregate, activeCampaigns, viewsAggregate, revenueCampaigns] =
+    await Promise.all([
+      prisma.user.aggregate({
+        where: { role: UserRole.ARTIST },
+        _sum: { balance: true },
+        _count: true,
+      }),
+      prisma.transaction.aggregate({
+        where: { type: "WITHDRAWAL", status: "COMPLETED", ...dateFilter },
+        _sum: { amount: true },
+        _count: true,
+      }),
+      prisma.campaign.findMany({
+        where: { status: CampaignStatus.ACTIVE },
+        select: { totalBudget: true, commissionPercent: true },
+      }),
+      prisma.submission.aggregate({
+        where: { status: "APPROVED", ...dateFilter },
+        _sum: { lastViewCount: true },
+        _count: true,
+      }),
+      prisma.campaign.findMany({
+        where: {
+          status: { in: [CampaignStatus.ACTIVE, CampaignStatus.COMPLETED] },
+          ...dateFilter,
         },
-      },
-    },
-    orderBy: { createdAt: "desc" },
-  });
+        select: { totalBudget: true, commissionPercent: true },
+      }),
+    ]);
 
-  const submissions = await prisma.submission.findMany({
-    where: dateFilter,
-    select: {
-      createdAt: true,
-      status: true,
-      lastViewCount: true,
-      lastLikeCount: true,
-      lastCommentCount: true,
-      lastShareCount: true,
-    },
-    orderBy: { createdAt: "desc" },
-    take: 1000, // Limit for chart data
-  });
-
-  // Calculate platform fees and safety reserves from approved campaigns only
-  // Only count ACTIVE and COMPLETED campaigns (approved ones)
-  const approvedCampaigns = campaigns.filter(
-    (c) => c.status === "ACTIVE" || c.status === "COMPLETED"
-  );
-
-  const platformFees = approvedCampaigns.reduce((sum, c) => {
+  const totalBank = Number(bankAggregate._sum.balance || 0);
+  const artistCount = bankAggregate._count;
+  const totalPayouts = Number(payoutsAggregate._sum.amount || 0);
+  const payoutCount = payoutsAggregate._count;
+  const activeCampaignsCount = activeCampaigns.length;
+  const activePrizePool = activeCampaigns.reduce((sum, c) => {
+    const budget = Number(c.totalBudget) || 0;
+    const commission = c.commissionPercent || 20;
+    return sum + budget * (1 - commission / 100);
+  }, 0);
+  const totalViews = viewsAggregate._sum.lastViewCount || 0;
+  const approvedSubmissionsCount = viewsAggregate._count;
+  const platformRevenue = revenueCampaigns.reduce((sum, c) => {
     const budget = Number(c.totalBudget) || 0;
     const commission = c.commissionPercent || 20;
     const fee = (budget * commission) / 100;
     return sum + (isNaN(fee) ? 0 : fee);
   }, 0);
 
-  // Revenue = Platform Fees (income from approved campaigns)
-  const totalRevenue = platformFees;
+  // ─── Batch 2: Counts + Alerts (parallelized) ──────────────────
+  const [authenticatedCreators, authenticatedArtists, pendingCampaigns, pendingTransactionsData, pendingSubmissionsCount] =
+    await Promise.all([
+      prisma.user.count({ where: { role: UserRole.CREATOR } }),
+      prisma.user.count({ where: { role: UserRole.ARTIST } }),
+      prisma.campaign.count({ where: { status: CampaignStatus.PENDING_APPROVAL } }),
+      prisma.transaction.aggregate({
+        where: { status: "PENDING", type: { in: ["DEPOSIT", "WITHDRAWAL"] } },
+        _sum: { amount: true },
+        _count: true,
+      }),
+      prisma.submission.count({ where: { status: "PENDING", ...dateFilter } }),
+    ]);
 
-  const totalPayouts = transactions
-    .filter((t) => t.type === "WITHDRAWAL")
-    .reduce((sum, t) => sum + Number(t.amount), 0);
+  // ─── Batch 3: Chart Data (parallelized) ────────────────────────
+  const [campaigns, transactions, submissions] = await Promise.all([
+    prisma.campaign.findMany({
+      where: dateFilter,
+      select: {
+        id: true,
+        title: true,
+        status: true,
+        totalBudget: true,
+        commissionPercent: true,
+        createdAt: true,
+        submissions: {
+          select: { lastViewCount: true, status: true },
+        },
+      },
+      orderBy: { createdAt: "desc" },
+    }),
+    prisma.transaction.findMany({
+      where: { status: "COMPLETED", type: "WITHDRAWAL", ...dateFilter },
+      select: { amount: true, createdAt: true },
+      orderBy: { createdAt: "desc" },
+      take: 1000,
+    }),
+    prisma.submission.findMany({
+      where: dateFilter,
+      select: {
+        createdAt: true,
+        campaignId: true,
+        lastViewCount: true,
+        lastLikeCount: true,
+        lastShareCount: true,
+      },
+      orderBy: { createdAt: "desc" },
+      take: 1000,
+    }),
+  ]);
 
-  // Calculate total bank (sum of all artist balances only)
-  const totalBank = users
-    .filter((u) => u.role === UserRole.ARTIST)
-    .reduce((sum, u) => sum + Number(u.balance || 0), 0);
+  // ─── Chart 1: Daily Financial Data ───────────────────────────────
 
-  const artistCount = users.filter((u) => u.role === UserRole.ARTIST).length;
-
-  // User metrics (kept for potential future use)
-
-  // Campaign metrics
-  const activeCampaigns = campaigns.filter((c) => c.status === "ACTIVE").length;
-  const completedCampaigns = campaigns.filter((c) => c.status === "COMPLETED").length;
-  const totalCampaignBudget = campaigns.reduce(
-    (sum, c) => sum + Number(c.totalBudget),
-    0
-  );
-
-
-  // Submission metrics
-  const approvedSubmissions = submissions.filter((s) => s.status === "APPROVED").length;
-  const pendingSubmissions = submissions.filter((s) => s.status === "PENDING").length;
-  const rejectedSubmissions = submissions.filter((s) => s.status === "REJECTED").length;
-
-  const totalViews = submissions.reduce((sum, s) => sum + s.lastViewCount, 0);
-  const totalLikes = submissions.reduce((sum, s) => sum + s.lastLikeCount, 0);
-  const totalComments = submissions.reduce((sum, s) => sum + s.lastCommentCount, 0);
-  const totalShares = submissions.reduce((sum, s) => sum + s.lastShareCount, 0);
-
-
-  // Chart data - Group platform fees by campaign creation date (revenue)
-  const revenueDataMap = new Map<string, number>();
-  approvedCampaigns.forEach((campaign) => {
-    const date = new Date(campaign.createdAt);
-    const dateKey = date.toISOString().split("T")[0]; // YYYY-MM-DD
-    const budget = Number(campaign.totalBudget) || 0;
-    const commission = campaign.commissionPercent || 20;
-    const fee = (budget * commission) / 100;
-    if (!isNaN(fee) && fee > 0) {
-      revenueDataMap.set(dateKey, (revenueDataMap.get(dateKey) || 0) + fee);
-    }
+  // Group campaigns by creation date
+  const campaignsByDate = new Map<string, { count: number; budget: number; commission: number }>();
+  campaigns.forEach((c) => {
+    const dateKey = new Date(c.createdAt).toISOString().split("T")[0];
+    const existing = campaignsByDate.get(dateKey) || { count: 0, budget: 0, commission: 0 };
+    const budget = Number(c.totalBudget) || 0;
+    const commissionRate = c.commissionPercent || 20;
+    existing.count += 1;
+    existing.budget += budget;
+    existing.commission += (budget * commissionRate) / 100;
+    campaignsByDate.set(dateKey, existing);
   });
 
-  const revenueData = Array.from(revenueDataMap.entries())
-    .map(([date, revenue]) => ({ date, revenue }))
-    .sort((a, b) => a.date.localeCompare(b.date));
-
   // Group payouts by date
-  const payoutsData = groupTransactionsByDate(
-    transactions.map(t => ({
-      ...t,
-      amount: Number(t.amount)
-    })),
-    "WITHDRAWAL"
-  );
+  const payoutsByDate = new Map<string, number>();
+  transactions.forEach((t) => {
+    const dateKey = new Date(t.createdAt).toISOString().split("T")[0];
+    payoutsByDate.set(dateKey, (payoutsByDate.get(dateKey) || 0) + Number(t.amount));
+  });
 
-  // Combine revenue and payouts for comparison
-  // Get all unique dates from both revenue and payouts
-  const allDates = new Set<string>();
-  revenueData.forEach((item) => allDates.add(item.date));
-  payoutsData.forEach((item) => allDates.add(item.date));
-
-  // Create a map for quick lookup
-  const revenueMap = new Map<string, number>();
-  revenueData.forEach((item) => revenueMap.set(item.date, item.revenue));
-
-  const payoutsMap = new Map<string, number>();
-  payoutsData.forEach((item) => payoutsMap.set(item.date, item.revenue));
-
-  // Combine data ensuring all dates are included
-  const revenuePayoutsData = Array.from(allDates)
+  // Combine into a single timeline
+  const financialDates = new Set([...campaignsByDate.keys(), ...payoutsByDate.keys()]);
+  const financialChartData = Array.from(financialDates)
     .sort((a, b) => a.localeCompare(b))
     .map((date) => ({
       date,
-      revenue: revenueMap.get(date) || 0,
-      payouts: payoutsMap.get(date) || 0,
+      dateLabel: new Date(date).toLocaleDateString("tr-TR", { month: "short", day: "numeric" }),
+      campaignCount: campaignsByDate.get(date)?.count || 0,
+      totalBudget: campaignsByDate.get(date)?.budget || 0,
+      commission: campaignsByDate.get(date)?.commission || 0,
+      payouts: payoutsByDate.get(date) || 0,
     }));
 
-  const engagementData = groupEngagementByDate(submissions);
+  // ─── Chart 2: Daily Content Data ─────────────────────────────────
 
-  // Top campaigns by views
+  const submissionsByDate = new Map<string, {
+    count: number;
+    views: number;
+    likes: number;
+    shares: number;
+    campaignIds: Set<string>;
+  }>();
+  submissions.forEach((s) => {
+    const dateKey = new Date(s.createdAt).toISOString().split("T")[0];
+    const existing = submissionsByDate.get(dateKey) || {
+      count: 0, views: 0, likes: 0, shares: 0, campaignIds: new Set<string>(),
+    };
+    existing.count += 1;
+    existing.views += s.lastViewCount || 0;
+    existing.likes += s.lastLikeCount || 0;
+    existing.shares += s.lastShareCount || 0;
+    if (s.campaignId) existing.campaignIds.add(s.campaignId);
+    submissionsByDate.set(dateKey, existing);
+  });
+
+  const contentChartData = Array.from(submissionsByDate.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, d]) => ({
+      date,
+      dateLabel: new Date(date).toLocaleDateString("tr-TR", { month: "short", day: "numeric" }),
+      campaignCount: d.campaignIds.size,
+      submissions: d.count,
+      views: d.views,
+      likes: d.likes,
+      shares: d.shares,
+    }));
+
+  // ─── Top Campaigns ───────────────────────────────────────────────
+
   const topCampaigns = campaigns
-    .map((c) => {
-      const campaignViews = c.submissions.reduce(
-        (sum, s) => sum + s.lastViewCount,
-        0
-      );
-      return {
-        id: c.id,
-        title: c.title,
-        status: c.status,
-        totalBudget: Number(c.totalBudget),
-        submissions: c.submissions.length,
-        totalViews: campaignViews,
-        createdAt: c.createdAt,
-      };
-    })
+    .map((c) => ({
+      id: c.id,
+      title: c.title,
+      status: c.status,
+      totalBudget: Number(c.totalBudget),
+      submissions: c.submissions.length,
+      totalViews: c.submissions.reduce((sum, s) => sum + s.lastViewCount, 0),
+      createdAt: c.createdAt,
+    }))
     .sort((a, b) => b.totalViews - a.totalViews)
-    .slice(0, 10);
+    .slice(0, 8);
 
-  // Alerts
+  // ─── Alerts ──────────────────────────────────────────────────────
+
   const alerts: Array<{
     id: string;
     type: "warning" | "info" | "error";
@@ -280,68 +250,61 @@ export default async function AdminAnalyticsPage({ searchParams }: AdminAnalytic
     link?: string;
     linkText?: string;
   }> = [];
+
   if (pendingCampaigns > 0) {
     alerts.push({
       id: "pending-campaigns",
-      type: "warning" as const,
+      type: "warning",
       title: "Onay Bekleyen Kampanyalar",
       message: `${pendingCampaigns} kampanya onay bekliyor`,
       count: pendingCampaigns,
       link: "/admin/campaigns",
-      linkText: "Kampanyaları Görüntüle",
+      linkText: "Kampanyaları Gör",
     });
   }
 
-  if (pendingTransactions > 0) {
+  if (pendingTransactionsData._count > 0) {
     alerts.push({
       id: "pending-transactions",
-      type: "info" as const,
+      type: "info",
       title: "Bekleyen İşlemler",
-      message: `${pendingTransactions} işlem onay bekliyor`,
-      count: pendingTransactions,
-      amount: pendingTransactionsAmount._sum.amount ? Number(pendingTransactionsAmount._sum.amount) : undefined,
+      message: `${pendingTransactionsData._count} işlem onay bekliyor`,
+      count: pendingTransactionsData._count,
+      amount: pendingTransactionsData._sum.amount ? Number(pendingTransactionsData._sum.amount) : undefined,
       link: "/admin/transactions",
-      linkText: "İşlemleri Görüntüle",
+      linkText: "İşlemleri Gör",
     });
   }
 
-  if (pendingSubmissions > 10) {
+  if (pendingSubmissionsCount > 10) {
     alerts.push({
       id: "pending-submissions",
-      type: "warning" as const,
+      type: "warning",
       title: "Çok Sayıda Bekleyen Gönderi",
-      message: `${pendingSubmissions} gönderi onay bekliyor`,
-      count: pendingSubmissions,
+      message: `${pendingSubmissionsCount} gönderi onay bekliyor`,
+      count: pendingSubmissionsCount,
     });
   }
 
-
   return (
-    <div className="space-y-8">
-      {/* Header */}
+    <div className="space-y-6">
+      {/* ─── Header ─────────────────────────────────────────────── */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-red-500/10 border border-red-500/20 text-xs font-medium text-red-400 mb-2">
             <Shield className="w-3 h-3" />
             <span>Yönetici Paneli</span>
           </div>
-          <h2 className="text-3xl font-bold tracking-tight text-white">Platform Genel Bakış</h2>
-          <p className="text-zinc-400 mt-1">Platform sağlığı, finansal durum ve kullanıcı aktiviteleri.</p>
+          <h2 className="text-3xl font-bold tracking-tight text-white">Platform Analitik</h2>
+          <p className="text-zinc-400 mt-1">Finansal durum, kampanya performansı ve kullanıcı aktiviteleri</p>
         </div>
         <Suspense fallback={<div className="h-10 w-48 bg-white/5 animate-pulse rounded-lg" />}>
           <DateRangeFilter />
         </Suspense>
       </div>
 
-      {/* KPI Cards */}
-      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-5">
-        <MetricCard
-          title="Toplam Görüntülenme"
-          value={formatNumber(totalViews)}
-          description={`${approvedSubmissions} onaylanan gönderi`}
-          icon={<Video className="h-4 w-4 text-cyan-400" />}
-          variant="default"
-        />
+      {/* ─── KPI Cards (5) ──────────────────────────────────────── */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
         <FinancialMetricCard
           title="Toplam Banka"
           value={formatCurrency(totalBank)}
@@ -356,150 +319,164 @@ export default async function AdminAnalyticsPage({ searchParams }: AdminAnalytic
         <FinancialMetricCard
           title="Toplam Ödemeler"
           value={formatCurrency(totalPayouts)}
-          description="Tüm zamanlar"
+          description={`${payoutCount} ödeme`}
           icon={<TLIcon className="h-4 w-4 text-red-400" />}
           variant="destructive"
-          modalTitle="Toplam Ödemeler Detayları"
+          modalTitle="Ödeme Detayları"
           modalType="payouts"
           totalAmount={totalPayouts}
           className="border-red-500/20"
         />
         <FinancialMetricCard
           title="Platform Geliri"
-          value={formatCurrency(isNaN(platformFees) ? 0 : platformFees)}
+          value={formatCurrency(isNaN(platformRevenue) ? 0 : platformRevenue)}
           description="Toplam komisyon"
           icon={<DollarSign className="h-4 w-4 text-purple-400" />}
           variant="premium"
           modalTitle="Platform Geliri Detayları"
           modalType="platformFee"
-          totalAmount={isNaN(platformFees) ? 0 : platformFees}
+          totalAmount={isNaN(platformRevenue) ? 0 : platformRevenue}
           className="border-purple-500/20"
+        />
+        <MetricCard
+          title="Aktif Kampanyalar"
+          value={activeCampaignsCount}
+          description={formatCurrency(activePrizePool) + " ödül havuzu"}
+          icon={<Zap className="h-4 w-4 text-yellow-400" />}
+          variant="warning"
+        />
+        <MetricCard
+          title="Toplam Görüntülenme"
+          value={formatNumber(totalViews)}
+          description={`${approvedSubmissionsCount} onaylı gönderi`}
+          icon={<Video className="h-4 w-4 text-cyan-400" />}
+          variant="default"
         />
       </div>
 
-      {/* Alerts Section */}
+      {/* ─── Alerts ─────────────────────────────────────────────── */}
       {alerts.length > 0 && <AlertsSection alerts={alerts} />}
 
-      {/* Charts Grid */}
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Card className="bg-white/5 border-white/10 backdrop-blur-md">
-          <CardHeader>
-            <CardTitle className="text-lg font-medium text-white">Gelir ve Gider Analizi</CardTitle>
-            <CardDescription className="text-zinc-400">Platform gelirleri vs. Ödemeler</CardDescription>
-          </CardHeader>
-          <CardContent className="pl-0">
-            <RevenuePayoutsComparison data={revenuePayoutsData} />
-          </CardContent>
-        </Card>
+      {/* ─── Chart 1: Daily Financial ───────────────────────────── */}
+      <Card className="bg-white/5 border-white/10 backdrop-blur-md">
+        <CardHeader className="pb-2">
+          <div className="flex items-center gap-2">
+            <TrendingUp className="w-4 h-4 text-emerald-400" />
+            <CardTitle className="text-lg font-medium text-white">Günlük Finansal Özet</CardTitle>
+          </div>
+          <CardDescription className="text-zinc-400">
+            Oluşturulan kampanyaların toplam bütçesi, komisyon geliri ve ödemeler
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="pl-2">
+          <SectionErrorBoundary>
+            <DailyFinancialChart data={financialChartData} />
+          </SectionErrorBoundary>
+        </CardContent>
+      </Card>
 
-        <Card className="bg-white/5 border-white/10 backdrop-blur-md">
-          <CardHeader>
-            <CardTitle className="text-lg font-medium text-white">Etkileşim Metrikleri</CardTitle>
-            <CardDescription className="text-zinc-400">Beğeni, Yorum ve Paylaşım trendleri</CardDescription>
-          </CardHeader>
-          <CardContent className="pl-0">
-            <EngagementMetricsChart data={engagementData} />
-          </CardContent>
-        </Card>
-      </div>
+      {/* ─── Chart 2: Daily Content ─────────────────────────────── */}
+      <Card className="bg-white/5 border-white/10 backdrop-blur-md">
+        <CardHeader className="pb-2">
+          <div className="flex items-center gap-2">
+            <BarChart3 className="w-4 h-4 text-cyan-400" />
+            <CardTitle className="text-lg font-medium text-white">Günlük İçerik Performansı</CardTitle>
+          </div>
+          <CardDescription className="text-zinc-400">
+            Günlük gönderiler, görüntülenme, beğeni ve paylaşım istatistikleri
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="pl-2">
+          <SectionErrorBoundary>
+            <DailyContentChart data={contentChartData} />
+          </SectionErrorBoundary>
+        </CardContent>
+      </Card>
 
-      {/* Top Campaigns & Platform Health */}
+      {/* ─── Top Campaigns & User Stats ─────────────────────────── */}
       <div className="grid gap-6 lg:grid-cols-3">
-        <div className="lg:col-span-2">
-          <TopCampaignsTable campaigns={topCampaigns} />
-        </div>
-
-        <Card className="bg-white/5 border-white/10 backdrop-blur-md h-full">
-          <CardHeader>
-            <CardTitle className="text-lg font-medium text-white">Platform Sağlığı</CardTitle>
-            <CardDescription className="text-zinc-400">Performans göstergeleri</CardDescription>
+        <Card className="bg-white/5 border-white/10 backdrop-blur-md lg:col-span-2">
+          <CardHeader className="pb-2">
+            <div className="flex items-center gap-2">
+              <Music2 className="w-4 h-4 text-yellow-400" />
+              <CardTitle className="text-lg font-medium text-white">En İyi Kampanyalar</CardTitle>
+            </div>
+            <CardDescription className="text-zinc-400">En yüksek görüntülenmeye sahip kampanyalar</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-6">
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium text-zinc-300">Kampanya Tamamlanma</span>
-                <span className="text-sm font-bold text-white">
-                  {totalCampaigns > 0
-                    ? Math.round((completedCampaigns / totalCampaigns) * 100)
-                    : 0}
-                  %
-                </span>
+          <CardContent>
+            <SectionErrorBoundary>
+              <TopCampaignsTable campaigns={topCampaigns} maxItems={8} />
+            </SectionErrorBoundary>
+          </CardContent>
+        </Card>
+
+        <Card className="bg-white/5 border-white/10 backdrop-blur-md">
+          <CardHeader className="pb-2">
+            <div className="flex items-center gap-2">
+              <Users className="w-4 h-4 text-blue-400" />
+              <CardTitle className="text-lg font-medium text-white">Kayıtlı Kullanıcılar</CardTitle>
+            </div>
+            <CardDescription className="text-zinc-400">Platformdaki toplam kullanıcı sayıları</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {/* Creator Card */}
+            <div className="rounded-xl border border-purple-500/20 bg-purple-500/5 p-5">
+              <div className="flex items-center gap-3 mb-3">
+                <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-purple-500/20">
+                  <Eye className="w-5 h-5 text-purple-400" />
+                </div>
+                <div>
+                  <p className="text-xs text-zinc-400 uppercase tracking-wider">Creator</p>
+                  <p className="text-2xl font-bold text-white">{authenticatedCreators.toLocaleString("tr-TR")}</p>
+                </div>
               </div>
-              <div className="h-2 bg-zinc-800 rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-gradient-to-r from-purple-500 to-pink-500"
-                  style={{
-                    width: `${totalCampaigns > 0
-                      ? (completedCampaigns / totalCampaigns) * 100
-                      : 0
-                      }%`,
-                  }}
-                />
-              </div>
-              <p className="text-xs text-zinc-500">Toplam {totalCampaigns} kampanyadan {completedCampaigns} tanesi tamamlandı.</p>
+              <p className="text-xs text-zinc-500">Kayıtlı ve aktif içerik üreticileri</p>
             </div>
 
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium text-zinc-300">Gönderi Onay Oranı</span>
-                <span className="text-sm font-bold text-white">
-                  {totalSubmissions > 0
-                    ? Math.round((approvedSubmissions / totalSubmissions) * 100)
-                    : 0}
-                  %
-                </span>
+            {/* Artist Card */}
+            <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-5">
+              <div className="flex items-center gap-3 mb-3">
+                <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-emerald-500/20">
+                  <Music2 className="w-5 h-5 text-emerald-400" />
+                </div>
+                <div>
+                  <p className="text-xs text-zinc-400 uppercase tracking-wider">Sanatçı</p>
+                  <p className="text-2xl font-bold text-white">{authenticatedArtists.toLocaleString("tr-TR")}</p>
+                </div>
               </div>
-              <div className="h-2 bg-zinc-800 rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-gradient-to-r from-green-500 to-emerald-500"
-                  style={{
-                    width: `${totalSubmissions > 0
-                      ? (approvedSubmissions / totalSubmissions) * 100
-                      : 0
-                      }%`,
-                  }}
-                />
-              </div>
-              <p className="text-xs text-zinc-500">Toplam {totalSubmissions} gönderiden {approvedSubmissions} tanesi onaylandı.</p>
+              <p className="text-xs text-zinc-500">Kayıtlı ve kampanya oluşturabilen sanatçılar</p>
             </div>
 
-            <div className="pt-6 border-t border-white/10 space-y-3">
-              <h4 className="text-sm font-medium text-zinc-400 uppercase tracking-wider mb-2">Toplam Etkileşim</h4>
-              <div className="flex items-center justify-between text-sm p-2 rounded-lg bg-white/5 hover:bg-white/10 transition-colors">
-                <span className="text-zinc-300 flex items-center gap-2">
-                  <div className="w-2 h-2 rounded-full bg-pink-500" /> Beğeni
-                </span>
-                <span className="font-semibold text-white">{formatNumber(totalLikes)}</span>
+            {/* Total */}
+            <div className="rounded-xl border border-white/10 bg-white/5 p-5">
+              <div className="flex items-center gap-3 mb-3">
+                <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-white/10">
+                  <Users className="w-5 h-5 text-zinc-300" />
+                </div>
+                <div>
+                  <p className="text-xs text-zinc-400 uppercase tracking-wider">Toplam</p>
+                  <p className="text-2xl font-bold text-white">{(authenticatedCreators + authenticatedArtists).toLocaleString("tr-TR")}</p>
+                </div>
               </div>
-              <div className="flex items-center justify-between text-sm p-2 rounded-lg bg-white/5 hover:bg-white/10 transition-colors">
-                <span className="text-zinc-300 flex items-center gap-2">
-                  <div className="w-2 h-2 rounded-full bg-blue-500" /> Yorum
+              <div className="flex items-center gap-4 text-xs text-zinc-500">
+                <span className="flex items-center gap-1">
+                  <div className="w-2 h-2 rounded-full bg-purple-400" />
+                  {authenticatedCreators > 0 && authenticatedArtists > 0
+                    ? `${Math.round((authenticatedCreators / (authenticatedCreators + authenticatedArtists)) * 100)}% Creator`
+                    : "Creator"
+                  }
                 </span>
-                <span className="font-semibold text-white">{formatNumber(totalComments)}</span>
-              </div>
-              <div className="flex items-center justify-between text-sm p-2 rounded-lg bg-white/5 hover:bg-white/10 transition-colors">
-                <span className="text-zinc-300 flex items-center gap-2">
-                  <div className="w-2 h-2 rounded-full bg-green-500" /> Paylaşım
+                <span className="flex items-center gap-1">
+                  <div className="w-2 h-2 rounded-full bg-emerald-400" />
+                  {authenticatedCreators > 0 && authenticatedArtists > 0
+                    ? `${Math.round((authenticatedArtists / (authenticatedCreators + authenticatedArtists)) * 100)}% Sanatçı`
+                    : "Sanatçı"
+                  }
                 </span>
-                <span className="font-semibold text-white">{formatNumber(totalShares)}</span>
-              </div>
-
-              <div className="mt-4 p-3 rounded-lg bg-purple-500/10 border border-purple-500/20 text-center">
-                <p className="text-xs text-purple-300 mb-1">Ortalama Gönderi Başına İzlenme</p>
-                <p className="text-xl font-bold text-white">
-                  {approvedSubmissions > 0
-                    ? formatNumber(Math.floor(totalViews / approvedSubmissions))
-                    : 0}
-                </p>
               </div>
             </div>
           </CardContent>
         </Card>
-      </div>
-
-      {/* API Health (Bottom) */}
-      <div className="grid gap-6">
-        <ApiCallsChartClient />
       </div>
     </div>
   );

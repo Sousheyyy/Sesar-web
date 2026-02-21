@@ -1,0 +1,32 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"main": ".open-next/worker.js",
+	"name": "sesar-web",
+	"compatibility_date": "2026-02-18",
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"assets": {
+		"directory": ".open-next/assets",
+		"binding": "ASSETS"
+	},
+	"services": [
+		{
+			"binding": "WORKER_SELF_REFERENCE",
+			"service": "sesar-web"
+		}
+	],
+	// Cloudflare Image Resizing — enables next/image on Workers
+	"images": {
+		"binding": "IMAGES"
+	},
+	// Hyperdrive connection pooler for Supabase PostgreSQL
+	// Create via: npx wrangler hyperdrive create sesar-db --connection-string="<supabase-direct-url>"
+	// Then replace the id below with the output
+	"hyperdrive": [
+		{
+			"binding": "HYPERDRIVE",
+			"id": "be55c53084db42178e15252ffe284538"
+		}
+	]
+}

@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { UsersPageClient } from "@/components/admin/users-page-client";
 
 // Force dynamic rendering for Cloudflare Pages
-export const dynamic = 'force-dynamic';
+export const dynamic = "force-dynamic";
 
 export default async function AdminUsersPage() {
   await requireAdmin();
@@ -15,7 +15,10 @@ export default async function AdminUsersPage() {
       name: true,
       role: true,
       balance: true,
+      followerCount: true,
       tiktokHandle: true,
+      tiktokAvatarUrl: true,
+      avatar: true,
       createdAt: true,
       _count: {
         select: {
@@ -30,7 +33,6 @@ export default async function AdminUsersPage() {
     },
   });
 
-  // Convert Decimal objects to numbers for client component
   const serializedUsers = users.map((user) => ({
     ...user,
     balance: Number(user.balance),
@@ -46,5 +48,3 @@ export default async function AdminUsersPage() {
 
   return <UsersPageClient users={serializedUsers} stats={stats} />;
 }
-
-

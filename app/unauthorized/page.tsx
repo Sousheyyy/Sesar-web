@@ -5,12 +5,13 @@ import { ShieldAlert, Smartphone } from "lucide-react";
 // Force dynamic rendering for Cloudflare Pages
 export const dynamic = 'force-dynamic';
 
-export default function UnauthorizedPage({
+export default async function UnauthorizedPage({
   searchParams,
 }: {
-  searchParams: { reason?: string };
+  searchParams: Promise<{ reason?: string }>;
 }) {
-  const isMobileOnly = searchParams.reason === "mobile-only";
+  const resolvedSearchParams = await searchParams;
+  const isMobileOnly = resolvedSearchParams.reason === "mobile-only";
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-gradient-to-br from-blue-50 via-white to-purple-50 p-4">

@@ -77,14 +77,11 @@ export async function POST(req: NextRequest) {
       });
 
       if (existingSong) {
-        console.log('✅ Song found in DB (cache hit)', { musicId, duration: Date.now() - startTime });
-
         // Migrate cover to Supabase if it's still a TikTok CDN URL
         if (existingSong.coverImage && !existingSong.coverImage.includes('supabase')) {
           const storagePath = `${existingSong.tiktokMusicId || existingSong.id}/${Date.now()}.jpg`;
           const permanentUrl = await uploadImageFromUrl(STORAGE_BUCKETS.COVERS, storagePath, existingSong.coverImage);
           if (permanentUrl) {
-            console.log('✅ Existing song cover migrated to Supabase:', permanentUrl);
             const updatedSong = await prisma.song.update({
               where: { id: existingSong.id },
               data: { coverImage: permanentUrl }
@@ -129,7 +126,6 @@ export async function POST(req: NextRequest) {
     }
 
     // 7. Fetch from Apify (first time or no music ID extracted)
-    console.log('📡 Fetching from Apify...', { url: normalizedUrl });
 
     let metadata: { title: string; authorName: string; coverImage: string; tiktokMusicId: string };
     try {
@@ -150,10 +146,9 @@ export async function POST(req: NextRequest) {
       const storagePath = `${metadata.tiktokMusicId}/${Date.now()}.jpg`;
       const permanentUrl = await uploadImageFromUrl(STORAGE_BUCKETS.COVERS, storagePath, coverImageUrl);
       if (permanentUrl) {
-        console.log('✅ Cover uploaded to Supabase:', permanentUrl);
         coverImageUrl = permanentUrl;
       } else {
-        console.warn('⚠️ Cover upload to Supabase failed, keeping original URL');
+        console.warn('Cover upload to Supabase failed, keeping original URL');
       }
     }
 
@@ -181,12 +176,6 @@ export async function POST(req: NextRequest) {
       }
     });
 
-    console.log('✅ Song saved to DB', {
-      songId: song.id,
-      musicId: song.tiktokMusicId,
-      duration: Date.now() - startTime
-    });
-
     return NextResponse.json({
       success: true,
       song,
@@ -196,7 +185,7 @@ export async function POST(req: NextRequest) {
 
   } catch (error: any) {
     // Log error for monitoring
-    console.error('❌ Song upload failed:', {
+    console.error('Song upload failed:', {
       error: error.message,
       type: error.name,
       duration: Date.now() - startTime

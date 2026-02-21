@@ -2,65 +2,9 @@ import { initTRPC } from "@trpc/server";
 import superjson from "superjson";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
-import { GoogleGenerativeAI } from "@google/generative-ai";
 import { Context } from "../context";
-import { getCommissionFromBudget, MIN_DURATION_DAYS, MAX_DURATION_DAYS } from "../lib/tierUtils";
 import { uploadImageFromUrl, STORAGE_BUCKETS } from "@/lib/supabase/storage";
-
-// ─── InsightIQ (formerly Phyllo) helpers ───────────────────────
-const INSIGHTIQ_BASE_URL = process.env.INSIGHTIQ_BASE_URL || "https://api.staging.insightiq.ai";
-
-const getInsightIQAuthHeader = () => {
-  const id = process.env.INSIGHTIQ_CLIENT_ID;
-  const secret = process.env.INSIGHTIQ_CLIENT_SECRET;
-  if (!id || !secret) throw new Error("Missing INSIGHTIQ_CLIENT_ID or INSIGHTIQ_CLIENT_SECRET");
-  return `Basic ${Buffer.from(`${id}:${secret}`).toString("base64")}`;
-};
-
-async function insightiqFetch(path: string, opts: RequestInit = {}) {
-  const res = await fetch(`${INSIGHTIQ_BASE_URL}${path}`, {
-    ...opts,
-    headers: {
-      Authorization: getInsightIQAuthHeader(),
-      "Content-Type": "application/json",
-      ...((opts.headers as Record<string, string>) || {}),
-    },
-  });
-  if (!res.ok) {
-    const body = await res.text();
-    console.error(`InsightIQ ${res.status} [${path}]:`, body);
-    throw new Error(`InsightIQ ${res.status}: ${body.substring(0, 300)}`);
-  }
-  return res.json();
-}
-
-/**
- * Fetch video content data from InsightIQ using public content fetch.
- * This is a synchronous endpoint — no polling needed.
- * Uses url + work_platform_id (TikTok), does NOT require account_id.
- */
-const TIKTOK_WORK_PLATFORM_ID = "de55aeec-0dc8-4119-bf90-16b3d1f0c987";
-
-async function fetchVideoViaInsightIQ(tiktokUrl: string): Promise<any> {
-  const response = await insightiqFetch(
-    "/v1/social/creators/contents/fetch",
-    {
-      method: "POST",
-      headers: { "Accept": "application/json" },
-      body: JSON.stringify({
-        content_url: tiktokUrl,
-        work_platform_id: TIKTOK_WORK_PLATFORM_ID,
-      })
-    }
-  );
-
-  if (!response.data || response.data.length === 0) {
-    throw new Error("İçerik alınamadı. Video herkese açık olmalıdır.");
-  }
-
-  return response.data[0];
-}
-// ─── end InsightIQ helpers ─────────────────────────────────────
+import { fetchVideoViaInsightIQ } from "@/lib/insightiq";
 
 // Minimal tRPC setup for type compatibility
 // This app uses REST API routes, but tRPC types are imported for compatibility
@@ -97,7 +41,11 @@ export const appRouter = t.router({
   }),
   getUser: t.procedure
     .input(z.object({ userId: z.string() }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
+      const callerId = ctx.user?.id;
+      if (!callerId) throw new Error("UNAUTHORIZED");
+      if (callerId !== input.userId) throw new Error("FORBIDDEN");
+
       const user = await prisma.user.findUnique({
         where: { id: input.userId },
         select: {
@@ -108,7 +56,6 @@ export const appRouter = t.router({
           balance: true,
           avatar: true,
           tiktokHandle: true,
-          couponBalance: true,
           plan: true,
           subscriptionEndsAt: true,
           cycleStartDate: true,
@@ -171,7 +118,6 @@ export const appRouter = t.router({
           name: input.name || 'içerik üreticisi',
           role: 'CREATOR',
           balance: 0,
-          couponBalance: 0,
           plan: 'FREE',
           cycleStartDate: new Date()
         }
@@ -197,12 +143,16 @@ export const appRouter = t.router({
         ]
       };
 
-      // Server-side search
+      // Server-side search (uses AND to not overwrite the status/endDate OR clause)
       if (search) {
-        where.OR = [
-          { title: { contains: search, mode: 'insensitive' } },
-          { song: { title: { contains: search, mode: 'insensitive' } } },
-          { song: { authorName: { contains: search, mode: 'insensitive' } } }
+        where.AND = [
+          {
+            OR: [
+              { title: { contains: search, mode: 'insensitive' } },
+              { song: { title: { contains: search, mode: 'insensitive' } } },
+              { song: { authorName: { contains: search, mode: 'insensitive' } } }
+            ]
+          }
         ];
       }
 
@@ -1200,21 +1150,16 @@ export const appRouter = t.router({
       const commissionPercent = getCommissionFromBudget(budgetTL);
       if (commissionPercent === null) throw new Error("INVALID_BUDGET");
 
-      // 4. Deduction & Creation (Transaction)
+      // 4. Deduction & Creation (Transaction — atomic balance check)
       const campaign = await prisma.$transaction(async (tx) => {
-        // Check Balance
-        const user = await tx.user.findUnique({ where: { id: userId } });
-        if (!user) throw new Error("USER_NOT_FOUND");
-
-        if (Number(user.balance) < budgetTL) {
-          throw new Error("INSUFFICIENT_BALANCE");
-        }
-
-        // Deduct from Wallet
-        await tx.user.update({
-          where: { id: userId },
+        // Atomic balance check + deduct (prevents race condition / negative balance)
+        const result = await tx.user.updateMany({
+          where: { id: userId, balance: { gte: budgetTL } },
           data: { balance: { decrement: budgetTL } }
         });
+        if (result.count === 0) {
+          throw new Error("INSUFFICIENT_BALANCE");
+        }
 
         // Record Spending Transaction
         await tx.transaction.create({
@@ -1374,44 +1319,24 @@ export const appRouter = t.router({
         orderBy: { createdAt: "desc" }
       });
 
-      // Aggregate calculations - separate ended vs active campaigns
-      // FIXED: totalEarnings (Toplam) = sum of finalized earnings from ENDED campaigns only
-      const totalEarnings = submissions
-        .filter(s => {
-          if (!s.campaign) return false;
-          // Campaign is ended if status is COMPLETED OR endDate has passed
-          const campaignEnded = s.campaign.status === 'COMPLETED' || (s.campaign.endDate && new Date(s.campaign.endDate) < new Date());
-          return campaignEnded; // Only ended campaigns
-        })
+      // Helper: check if a campaign is ended
+      const isCampaignEnded = (campaign: { status: string; endDate: Date | null }) =>
+        campaign.status === 'COMPLETED' || (campaign.endDate && new Date(campaign.endDate) < new Date());
+
+      // Split submissions by campaign status once
+      const endedSubmissions = submissions.filter(s => s.campaign && isCampaignEnded(s.campaign));
+      const activeSubmissions = submissions.filter(s => s.campaign && !isCampaignEnded(s.campaign));
+
+      const totalEarnings = endedSubmissions
         .reduce((sum, s) => sum + Number(s.totalEarnings), 0);
 
-      // FIXED: estimatedEarnings (Tahmini) = sum of estimated earnings from ACTIVE campaigns only
-      const estimatedEarnings = submissions
-        .filter(s => {
-          if (!s.campaign) return false;
-          // Campaign is ended if status is COMPLETED OR endDate has passed
-          const campaignEnded = s.campaign.status === 'COMPLETED' || (s.campaign.endDate && new Date(s.campaign.endDate) < new Date());
-          return !campaignEnded; // Only active campaigns
-        })
+      const estimatedEarnings = activeSubmissions
         .reduce((sum, s) => sum + Number(s.estimatedEarnings), 0);
 
       const totalViews = submissions.reduce((sum, s) => sum + (s.lastViewCount || 0), 0);
 
-      // UPDATED: Active videos count - only approved submissions with active (not ended) campaigns
-      const activeVideos = submissions.filter(s => {
-        if (s.status !== "APPROVED") return false;
-        if (!s.campaign) return false;
-        // Campaign is ended if status is COMPLETED OR endDate has passed
-        const campaignEnded = s.campaign.status === 'COMPLETED' || (s.campaign.endDate && new Date(s.campaign.endDate) < new Date());
-        return !campaignEnded; // Only count active campaigns
-      }).length;
-
-      // Calculate Average Contribution Percent - ONLY for ended campaigns
-      // OPTIMIZED: Filter from already-fetched submissions instead of separate query
-      const endedSubmissions = submissions.filter(s => {
-        const campaign = s.campaign;
-        return campaign && (campaign.status === 'COMPLETED' || (campaign.endDate && new Date(campaign.endDate) < new Date()));
-      });
+      const activeVideos = activeSubmissions
+        .filter(s => s.status === "APPROVED").length;
 
       const avgContributionPercent = endedSubmissions.length > 0
         ? (endedSubmissions.reduce((sum, s) => sum + (s.sharePercent || 0), 0) / endedSubmissions.length) * 100 // Convert to percentage
@@ -1432,14 +1357,9 @@ export const appRouter = t.router({
         orderBy: { createdAt: "desc" }
       });
 
-      // OPTIMIZED: Use already-fetched submissions instead of separate query
-      // Filter for finished campaigns from the submissions we already have
-      const finishedSubmissions = submissions.filter(s =>
-        s.status === 'APPROVED' &&
-        s.campaign &&
-        s.campaign.endDate &&
-        new Date(s.campaign.endDate) < new Date()
-      ).slice(0, 20);
+      const finishedSubmissions = endedSubmissions
+        .filter(s => s.status === 'APPROVED')
+        .slice(0, 20);
 
       const recentActivity = [
         // Campaign earnings - only from finished campaigns
@@ -1473,14 +1393,7 @@ export const appRouter = t.router({
         avgViews,
         totalVideos: submissions.length,
         recentActivity,
-        recentSubmissions: submissions
-          .filter(s => {
-            if (!s.campaign) return false;
-            // Only include submissions from active campaigns
-            const campaignEnded = s.campaign.status === 'COMPLETED' || (s.campaign.endDate && new Date(s.campaign.endDate) < new Date());
-            return !campaignEnded;
-          })
-          .slice(0, 10),
+        recentSubmissions: activeSubmissions.slice(0, 10),
         // User info
         creatorTier: user?.creatorTier,
         followerCount: user?.followerCount || 0,
@@ -1642,7 +1555,6 @@ export const appRouter = t.router({
 
       // Price: 300 TL
       const COST_TL = 300;
-      const COUPON_REWARD = 20; // Grant 20 coupons with each subscription
 
       if (Number(user.balance) < COST_TL) {
         throw new Error("INSUFFICIENT_BALANCE");
@@ -1657,7 +1569,6 @@ export const appRouter = t.router({
           where: { id: userId },
           data: {
             balance: { decrement: COST_TL },
-            couponBalance: { increment: COUPON_REWARD }, // Grant 20 coupons
             plan: "PRO",
             subscriptionEndsAt: expiresAt
           }
@@ -1667,600 +1578,13 @@ export const appRouter = t.router({
             userId,
             type: "SPEND",
             amount: COST_TL,
-            description: "Pro Üyelik (30 Gün) + 20 Market Kupon",
+            description: "Pro Üyelik (30 Gün)",
             status: "COMPLETED"
           }
         })
       ]);
 
       return { success: true, user: updatedUser };
-    }),
-
-  // Marketplace Procedures
-  buyCoupons: t.procedure
-    .input(z.object({ amount: z.number().min(1) }))
-    .mutation(async ({ input, ctx }) => {
-      const userId = ctx.user?.id;
-      if (!userId) throw new Error("UNAUTHORIZED");
-
-      const COST_PER_COUPON = 100; // 100 TL per coupon
-      const totalCost = input.amount * COST_PER_COUPON;
-
-      const user = await prisma.user.findUnique({ where: { id: userId } });
-      if (!user) throw new Error("USER_NOT_FOUND");
-
-      if (Number(user.balance) < totalCost) {
-        throw new Error("INSUFFICIENT_BALANCE");
-      }
-
-      // Deduct balance and add coupons
-      await prisma.$transaction([
-        prisma.user.update({
-          where: { id: userId },
-          data: {
-            balance: { decrement: totalCost },
-            couponBalance: { increment: input.amount }
-          }
-        }),
-        prisma.transaction.create({
-          data: {
-            userId,
-            type: "SPEND",
-            amount: totalCost,
-            status: "COMPLETED",
-            description: `Kupon Satın Alma: ${input.amount} kupon`
-          }
-        })
-      ]);
-
-      return { success: true };
-    }),
-
-  useCoupon: t.procedure
-    .input(z.object({
-      tool: z.enum(["PROFILE", "HASHTAG", "VALUATION", "AUDIT", "COMPARE"]),
-      input: z.string().min(1)
-    }))
-    .mutation(async ({ input, ctx }) => {
-      const userId = ctx.user?.id;
-      if (!userId) throw new Error("UNAUTHORIZED");
-
-      const user = await prisma.user.findUnique({ where: { id: userId } });
-      if (!user) throw new Error("USER_NOT_FOUND");
-
-      if (user.couponBalance < 1) {
-        throw new Error("INSUFFICIENT_COUPONS");
-      }
-
-      // Mock Analysis Logic based on Tool Type
-      let resultData: any = {};
-
-      if (input.tool === "HASHTAG") {
-        try {
-          const apiKey = process.env.GOOGLE_AI_API_KEY;
-
-          if (!apiKey) throw new Error("Missing Google AI API Key");
-
-          // Dynamically import to avoid load-time errors
-          const { GoogleGenerativeAI } = require("@google/generative-ai");
-          const genAI = new GoogleGenerativeAI(apiKey);
-          const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-
-          const prompt = `Analyze this TikTok video topic for a Turkish audience: "${input.input}".
-            Generate a JSON object with high-performing Turkish hashtags.
-            Format: { 
-              "broad": ["#tag1", "#tag2", ...], // 6-8 Popular/General tags (mostly Turkish)
-              "niche": ["#tag3", "#tag4", ...], // 6-8 Specific/Niche tags (mostly Turkish)
-              "viralityScore": 85, // 0-100 score based on trend potential
-              "bestTime": "19:00" // Best time to post in Turkey (HH:MM)
-            }. 
-            Only return the JSON.`;
-
-          const result = await model.generateContent(prompt);
-          const response = await result.response;
-          const text = response.text();
-
-          // Clean markdown helpers if present
-          const cleanJson = text.replace(/```json|```/g, "").trim();
-          resultData = JSON.parse(cleanJson);
-        } catch (error: any) {
-          console.error("Gemini Error:", error.message);
-          // Fallback if API fails for ANY reason (network, key, region, parsing)
-          resultData = {
-            broad: ["#fyp", "#kesfet", "#tiktok"],
-            niche: [`#${input.input.replace(/\s/g, "")}`, "#trend"],
-            viralityScore: 70,
-            bestTime: "20:00",
-            error: error.message // Optional: return error to UI for debugging
-          };
-        }
-      } else if (input.tool === "VALUATION") {
-        try {
-          // Real Data via TikAPI
-          // Marketplace tools are deprecated - require official TikTok Marketing API
-          throw new Error("Marketplace analysis tools are currently unavailable");
-
-          // 1. Fetch User Info (for Follower Count)
-          const apiKey = process.env.TIKAPI_KEY;
-          if (!apiKey) throw new Error("Missing TikAPI Key");
-
-          const userRes = await fetch(`https://api.tikapi.io/public/check?username=${input.input}`, {
-            headers: { "X-API-KEY": apiKey || '' }
-          });
-          if (!userRes.ok) throw new Error(`TikAPI Check Error: ${userRes.statusText}`);
-          const userData = await userRes.json();
-          const userInfo = userData.userInfo;
-          if (!userInfo) throw new Error("User not found");
-
-          const followers = userInfo.stats?.followerCount || 0;
-
-          // 2. Fetch User Posts (for Views/Engagement) - Recent Batch
-          // TikAPI public/posts requires 'secUid' for reliability.
-          const secUid = userInfo.user?.secUid;
-          if (!secUid) {
-            console.warn("No secUid found, trying username fallback but likely to fail if API demands secUid");
-          }
-
-          // Construct query - prefer secUid
-          const queryParam = secUid ? `secUid=${encodeURIComponent(secUid)}` : `username=${encodeURIComponent(userInfo.user?.uniqueId || input.input)}`;
-
-          const postsRes = await fetch(`https://api.tikapi.io/public/posts?${queryParam}`, {
-            headers: { "X-API-KEY": apiKey || '' }
-          });
-
-          if (!postsRes.ok) {
-            // If bad request, log more details if possible (TikAPI errors are sometimes in body)
-            const errText = await postsRes.text();
-            console.error("TikAPI Posts Error details:", errText);
-            throw new Error(`TikAPI Posts Error: ${postsRes.status} ${postsRes.statusText}`);
-          }
-
-          const postsData = await postsRes.json();
-          const posts = postsData.itemList || [];
-
-          // Filter Last 10 Days
-          const now = new Date();
-          const tenDaysAgo = new Date(now.getTime() - (10 * 24 * 60 * 60 * 1000));
-
-          const recentPosts = posts.filter((p: any) => new Date(p.createTime * 1000) > tenDaysAgo);
-
-          let avgViews = 0;
-          let safeEr = 0;
-
-          if (recentPosts.length > 0) {
-            const totalViews = recentPosts.reduce((acc: number, p: any) => acc + (p.stats?.playCount || 0), 0);
-            const totalLikes = recentPosts.reduce((acc: number, p: any) => acc + (p.stats?.diggCount || 0), 0);
-            const totalComments = recentPosts.reduce((acc: number, p: any) => acc + (p.stats?.commentCount || 0), 0);
-            const totalShares = recentPosts.reduce((acc: number, p: any) => acc + (p.stats?.shareCount || 0), 0);
-
-            // Weighted Engagement: Likes(1) + Comments(2) + Shares(3)
-            const weightedEngagements = totalLikes + (totalComments * 2) + (totalShares * 3);
-
-            avgViews = Math.floor(totalViews / recentPosts.length);
-
-            // Real ER Calculation (No Floor)
-            const realEr = totalViews > 0 ? (weightedEngagements / totalViews) * 100 : 0;
-            // No floor minimum of 10%
-            safeEr = Math.min(realEr, 100);
-          } else {
-            // Fallback if no posts in last 10 days: Use last 3 posts generally
-            if (posts.length > 0) {
-              const last3 = posts.slice(0, 3);
-              const totalViews = last3.reduce((acc: number, p: any) => acc + (p.stats?.playCount || 0), 0);
-              const totalLikes = last3.reduce((acc: number, p: any) => acc + (p.stats?.diggCount || 0), 0);
-              const totalComments = last3.reduce((acc: number, p: any) => acc + (p.stats?.commentCount || 0), 0);
-              const totalShares = last3.reduce((acc: number, p: any) => acc + (p.stats?.shareCount || 0), 0);
-
-              const weightedEngagements = totalLikes + (totalComments * 2) + (totalShares * 3);
-
-              avgViews = Math.floor(totalViews / last3.length);
-              const realEr = totalViews > 0 ? (weightedEngagements / totalViews) * 100 : 0;
-              safeEr = Math.min(realEr, 100);
-            } else {
-              avgViews = 0; // Truly inactive account
-              safeEr = 0;
-            }
-          }
-
-          // Dynamic CPM Algorithm
-          let cpm = 20; // Base 20 TL
-          let erMultiplier = 1;
-
-          if (safeEr >= 10) {
-            erMultiplier = 1.25; // Base boost (+25%) for hitting 10%
-            const excessEr = safeEr - 10;
-            if (excessEr > 0) {
-              // +2% boost for each %1 ER above 10
-              erMultiplier += (excessEr * 0.02);
-            }
-          }
-          cpm *= erMultiplier;
-
-          if (followers > 50000) cpm *= 1.1;
-
-          const estimatedPrice = (avgViews / 1000) * cpm;
-
-          resultData = {
-            username: userInfo.user?.uniqueId || input.input,
-            pricePerPost: estimatedPrice,
-            engagementRate: safeEr.toFixed(2),
-            avgViews: avgViews,
-            followers: followers,
-            cpmdUsed: cpm
-          };
-
-        } catch (error: any) {
-          console.error("TikAPI Valuation Error:", error.message);
-          throw new Error("Analiz sırasında bir hata oluştu: " + error.message);
-        }
-
-      } else if (input.tool === "PROFILE") {
-        try {
-          // Marketplace tools are deprecated - require official TikTok Marketing API
-          throw new Error("Marketplace analysis tools are currently unavailable");
-
-          // 1. Check User
-          const apiKey = process.env.TIKAPI_KEY;
-          if (!apiKey) throw new Error("Missing TikAPI Key");
-
-          const userRes = await fetch(`https://api.tikapi.io/public/check?username=${input.input}`, { headers: { "X-API-KEY": apiKey || '' } });
-          if (!userRes.ok) throw new Error("User Check Failed");
-          const userData = await userRes.json();
-          const userInfo = userData.userInfo;
-          if (!userInfo) throw new Error("User not found");
-
-          // 2. Fetch Posts
-          const secUid = userInfo.user?.secUid;
-          const target = secUid ? `secUid=${encodeURIComponent(secUid)}` : `username=${encodeURIComponent(userInfo.user?.uniqueId || input.input)}`;
-
-          const postsRes = await fetch(`https://api.tikapi.io/public/posts?${target}&count=15`, { headers: { "X-API-KEY": apiKey || '' } }); // Fetch a few more to ensure we get 10 valid
-          if (!postsRes.ok) throw new Error("Posts Fetch Failed");
-          const postsData = await postsRes.json();
-          const allPosts = postsData.itemList || [];
-
-          // 3. Analyze Last 10 Videos
-          const last10 = allPosts.slice(0, 10);
-
-          if (last10.length === 0) throw new Error("No recent videos found to analyze.");
-
-          const analyzedVideos = last10.map((p: any) => {
-            const views = p.stats?.playCount || 0;
-            const likes = p.stats?.diggCount || 0;
-            const comments = p.stats?.commentCount || 0;
-            const shares = p.stats?.shareCount || 0;
-
-            // Weighted ER: ((Likes + Comments*2 + Shares*3) / Views) * 100
-            const weightedEng = likes + (comments * 2) + (shares * 3);
-            const er = views > 0 ? (weightedEng / views) * 100 : 0;
-
-            return {
-              id: p.id,
-              desc: p.desc || "",
-              cover: p.video?.cover || "",
-              createTime: p.createTime,
-              stats: { views, likes, comments, shares, er }
-            };
-          });
-
-          // 4. Averages
-          const avgStats = {
-            views: Math.floor(analyzedVideos.reduce((acc: number, v: any) => acc + v.stats.views, 0) / analyzedVideos.length),
-            likes: Math.floor(analyzedVideos.reduce((acc: number, v: any) => acc + v.stats.likes, 0) / analyzedVideos.length),
-            comments: Math.floor(analyzedVideos.reduce((acc: number, v: any) => acc + v.stats.comments, 0) / analyzedVideos.length),
-            shares: Math.floor(analyzedVideos.reduce((acc: number, v: any) => acc + v.stats.shares, 0) / analyzedVideos.length),
-            er: parseFloat((analyzedVideos.reduce((acc: number, v: any) => acc + v.stats.er, 0) / analyzedVideos.length).toFixed(2))
-          };
-
-          // 5. Consistency Score (Based on Variance of Gaps between posts)
-          // If gaps are uniform, consistency is high.
-          let consistencyScore = 50;
-          if (analyzedVideos.length > 1) {
-            const gaps: number[] = [];
-            for (let i = 0; i < analyzedVideos.length - 1; i++) {
-              const gapHrs = Math.abs(analyzedVideos[i].createTime - analyzedVideos[i + 1].createTime) / 3600;
-              gaps.push(gapHrs);
-            }
-            // Calculate Coefficient of Variation (CV) = StdDev / Mean
-            const meanGap = gaps.reduce((a, b) => a + b, 0) / gaps.length;
-            const variance = gaps.reduce((a, b) => a + Math.pow(b - meanGap, 2), 0) / gaps.length;
-            const stdDev = Math.sqrt(variance);
-
-            const cv = stdDev / (meanGap || 1);
-            // Lower CV is better. If CV < 0.2 -> Excellent (100). If CV > 1.5 -> Bad (20).
-            // Map 0.2...1.5 to 100...20 roughly.
-            consistencyScore = Math.max(20, Math.min(100, 100 - (cv * 50)));
-
-            // Penalty for inactivity: If mean gap > 7 days (168 hrs), reduce score.
-            if (meanGap > 168) consistencyScore *= 0.7;
-          }
-
-          // 6. Community Health (Interaction Ratios)
-          // Comments/Likes ratio: 0.5% is good. Shares/Likes ratio: 10% is viral.
-          const commentRatio = avgStats.likes > 0 ? (avgStats.comments / avgStats.likes) * 100 : 0;
-          const shareRatio = avgStats.likes > 0 ? (avgStats.shares / avgStats.likes) * 100 : 0;
-
-          let communityScore = 50; // Base
-          if (commentRatio > 0.5) communityScore += 20; // Good talkative audience
-          if (commentRatio > 1.5) communityScore += 10;
-          if (shareRatio > 5) communityScore += 15; // High sharability
-          if (shareRatio > 10) communityScore += 15; // Very Viral
-          communityScore = Math.min(100, communityScore);
-
-
-          resultData = {
-            user: {
-              username: userInfo.user.uniqueId,
-              nickname: userInfo.user.nickname,
-              avatar: userInfo.user.avatarThumb,
-              followers: userInfo.stats.followerCount
-            },
-            averages: avgStats,
-            videos: analyzedVideos,
-            scores: {
-              consistency: Math.round(consistencyScore),
-              community: Math.round(communityScore)
-            }
-          };
-
-        } catch (error: any) {
-          console.error("Profile Analysis Error:", error.message);
-          throw new Error("Analiz Başarısız: " + error.message);
-        }
-
-      } else if (input.tool === "AUDIT") {
-        try {
-          // Marketplace tools are deprecated - require official TikTok Marketing API
-          throw new Error("Marketplace analysis tools are currently unavailable");
-
-          // Extract Video ID from Link
-          let videoId = input.input;
-          if (input.input.includes("tiktok.com")) {
-            const match = input.input.match(/\/video\/(\d+)/);
-            if (match) videoId = match![1];
-          }
-
-          // Fetch Video Details
-          const apiKey = process.env.TIKAPI_KEY;
-          const vidRes = await fetch(`https://api.tikapi.io/public/video?id=${videoId}`, {
-            headers: { "X-API-KEY": apiKey || '' }
-          });
-
-          if (!vidRes.ok) throw new Error("Video not found or API error");
-          const vidData = await vidRes.json();
-          const video = vidData.itemInfo?.itemStruct;
-          if (!video) throw new Error("Video data is empty");
-
-          // Calculate Stats
-          const stats = video.stats;
-          const views = stats.playCount || 1;
-          const likes = stats.diggCount || 0;
-          const comments = stats.commentCount || 0;
-          const shares = stats.shareCount || 0;
-          const saves = stats.collectCount || 0;
-          const downloads = stats.downloadCount || 0;
-
-          // User Formula: (likes*2 + comments*3 + shares*4)
-          const weightedEngagement = (likes * 2) + (comments * 3) + (shares * 4);
-          // Percentage
-          const customEr = (weightedEngagement / views) * 100;
-
-          // Calculate Virality Score (0-100)
-          const erScore = Math.min((customEr / 25) * 100, 100);
-          const viewScore = Math.min((views / 100000) * 100, 100);
-          const viralityScore = Math.round((erScore * 0.7) + (viewScore * 0.3));
-
-          // Assign Grade
-          let grade = "C";
-          if (viralityScore >= 90) grade = "S";
-          else if (viralityScore >= 75) grade = "A";
-          else if (viralityScore >= 50) grade = "B";
-          else if (viralityScore < 30) grade = "F";
-
-          resultData = {
-            video: {
-              id: video.id,
-              desc: video.desc,
-              cover: video.video?.cover,
-              author: video.author?.uniqueId,
-              authorAvatar: video.author?.avatarLarger,
-              createTime: video.createTime,
-              duration: video.video?.duration,
-            },
-            stats: {
-              views, likes, comments, shares, saves, downloads, er: customEr.toFixed(1)
-            },
-            scores: {
-              virality: viralityScore,
-              grade,
-              customEr: customEr.toFixed(1),
-              aiAnalysis: "Analiz hazırlanıyor..." // Placeholder
-            }
-          };
-
-          // Generate AI Analysis
-          // Generate AI Analysis
-          try {
-            const apiKey = process.env.GOOGLE_AI_API_KEY;
-            if (!apiKey) {
-              console.warn("GOOGLE_AI_API_KEY is missing/empty.");
-              resultData.scores.aiAnalysis = "API anahtarı eksik, analiz yapılamadı.";
-            } else {
-              const genAI = new GoogleGenerativeAI(apiKey!);
-              const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-
-              const prompt = `
-                Role: TikTok Koçu
-                Görev: Bu video için 2 cümlelik analiz yap.
-                Veriler: Not: ${grade}, Etkileşim: %${customEr.toFixed(1)}
-                
-                Format (Sadece 2 cümle):
-                1. Cümle: Videonun neden bu notu aldığını açıkla (etkileşim/izlenme dengesi).
-                2. Cümle: Daha iyi olması için net bir taktik ver.
-
-                Kurallar:
-                - Rakam kullanma.
-                - Basit ve net ol.
-                - "Bu notu aldı çünkü..." deme, direkt analizi söyle.
-                `;
-
-              const result = await model.generateContent(prompt);
-              const response = await result.response;
-              const text = response.text();
-              if (text) resultData.scores.aiAnalysis = text.trim();
-            }
-          } catch (aiError) {
-            console.error("AI Gen Error:", aiError);
-            resultData.scores.aiAnalysis = `${grade} notu aldın. Etkileşim oranlarını artırmaya odaklanmalısın. (AI Hatası)`;
-          }
-
-        } catch (error: any) {
-          console.error("AUDIT Tool Error:", error);
-          throw new Error(error.message || "Video analysis failed");
-        }
-      } else if (input.tool === "COMPARE") {
-        try {
-          // Marketplace tools are deprecated - require official TikTok Marketing API
-          throw new Error("Marketplace analysis tools are currently unavailable");
-
-          // Helper function to analyze a user
-          const analyzeUser = async (username: string) => {
-            const apiKey = process.env.TIKAPI_KEY;
-
-            // 1. Check User to get stats and secUid
-            const userRes = await fetch(`https://api.tikapi.io/public/check?username=${encodeURIComponent(username.trim())}`, {
-              headers: { "X-API-KEY": apiKey || '' }
-            });
-            if (!userRes.ok) throw new Error(`User ${username} check failed`);
-            const userData = await userRes.json();
-            const userInfo = userData.userInfo;
-            if (!userInfo) throw new Error(`User ${username} not found`);
-
-            // 2. Fetch Last 10 Posts
-            const target = userInfo.user?.secUid
-              ? `secUid=${encodeURIComponent(userInfo.user.secUid)}`
-              : `username=${encodeURIComponent(userInfo.user.uniqueId)}`;
-
-            const postsRes = await fetch(`https://api.tikapi.io/public/posts?${target}&count=15`, {
-              headers: { "X-API-KEY": apiKey || '' }
-            });
-            const postsData = await postsRes.json();
-            const allPosts = postsData.itemList || [];
-            const last10 = allPosts.slice(0, 10);
-
-            // 3. Calc Metrics
-            // Basic Profile Stats
-            const followers = userInfo.stats?.followerCount || 0;
-            const totalLikes = userInfo.stats?.heartCount || 0; // Lifetime likes usually in stats
-
-            let avgViews = 0;
-            let safeEr = 0;
-            let consistencyScore = 50;
-            let communityScore = 50;
-
-            if (last10.length > 0) {
-              // Avg Views + ER
-              const totalViews = last10.reduce((acc: number, p: any) => acc + (p.stats?.playCount || 0), 0);
-              avgViews = Math.floor(totalViews / last10.length);
-
-              const totalWeightedEng = last10.reduce((acc: number, p: any) => {
-                return acc + (p.stats?.diggCount || 0) + ((p.stats?.commentCount || 0) * 2) + ((p.stats?.shareCount || 0) * 3);
-              }, 0);
-
-              safeEr = totalViews > 0 ? (totalWeightedEng / totalViews) * 100 : 0;
-              safeEr = Math.min(safeEr, 100);
-
-              // Consistency
-              if (last10.length > 1) {
-                const gaps: number[] = [];
-                for (let i = 0; i < last10.length - 1; i++) {
-                  const gapHrs = Math.abs(last10[i].createTime - last10[i + 1].createTime) / 3600;
-                  gaps.push(gapHrs);
-                }
-                const meanGap = gaps.reduce((a, b) => a + b, 0) / gaps.length;
-                const variance = gaps.reduce((a, b) => a + Math.pow(b - meanGap, 2), 0) / gaps.length;
-                const cv = Math.sqrt(variance) / (meanGap || 1);
-                consistencyScore = Math.max(20, Math.min(100, 100 - (cv * 50)));
-                if (meanGap > 168) consistencyScore *= 0.7; // Inactive penalty
-              }
-
-              // Community (Aggregate of last 10)
-              const aggLikes = last10.reduce((acc: number, p: any) => acc + (p.stats?.diggCount || 0), 0);
-              const aggComments = last10.reduce((acc: number, p: any) => acc + (p.stats?.commentCount || 0), 0);
-              const aggShares = last10.reduce((acc: number, p: any) => acc + (p.stats?.shareCount || 0), 0);
-
-              const commentRatio = aggLikes > 0 ? (aggComments / aggLikes) * 100 : 0;
-              const shareRatio = aggLikes > 0 ? (aggShares / aggLikes) * 100 : 0;
-
-              if (commentRatio > 0.5) communityScore += 20;
-              if (commentRatio > 1.5) communityScore += 10;
-              if (shareRatio > 5) communityScore += 15;
-              if (shareRatio > 10) communityScore += 15;
-              communityScore = Math.min(100, communityScore);
-            }
-
-            return {
-              username: userInfo.user.uniqueId,
-              nickname: userInfo.user.nickname,
-              avatar: userInfo.user.avatarThumb,
-              stats: {
-                followers,
-                totalLikes,
-                avgViews,
-                er: parseFloat(safeEr.toFixed(2)),
-                consistency: Math.round(consistencyScore),
-                community: Math.round(communityScore)
-              }
-            };
-          };
-
-          // Parse Input "user1,user2"
-          const [user1Arg, user2Arg] = input.input.split(',').map((s: string) => s.trim());
-          if (!user1Arg || !user2Arg) throw new Error("Please enter two usernames separated by comma.");
-          // Run Parallel
-          const [user1Data, user2Data] = await Promise.all([
-            analyzeUser(user1Arg),
-            analyzeUser(user2Arg)
-          ]);
-
-          resultData = {
-            user1: user1Data,
-            user2: user2Data
-          };
-
-        } catch (error: any) {
-          console.error("Comparison Error:", error.message);
-          throw new Error("Karşılaştırma Başarısız: " + error.message);
-        }
-      }
-
-      // Deduct Coupon and Save History
-      await prisma.$transaction([
-        prisma.user.update({
-          where: { id: userId },
-          data: { couponBalance: { decrement: 1 } }
-        }),
-        prisma.marketplaceUsage.create({
-          data: {
-            userId,
-            toolType: input.tool,
-            input: input.input,
-            resultSnapshot: resultData
-          }
-        })
-      ]);
-
-      return { success: true, result: resultData };
-    }),
-
-  getMarketplaceHistory: t.procedure
-    .query(async ({ ctx }) => {
-      const userId = ctx.user?.id;
-      if (!userId) throw new Error("UNAUTHORIZED");
-
-      return await prisma.marketplaceUsage.findMany({
-        where: { userId },
-        orderBy: { createdAt: "desc" }
-      });
     }),
 
   rejectCampaign: t.procedure

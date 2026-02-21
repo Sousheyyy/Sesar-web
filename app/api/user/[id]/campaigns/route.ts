@@ -4,13 +4,14 @@ import { prisma } from "@/lib/prisma";
 import { UserRole } from "@prisma/client";
 
 // Force dynamic rendering for Cloudflare Pages
-export const dynamic = 'force-dynamic';
+export const dynamic = "force-dynamic";
 
 export async function GET(
-  req: NextRequest,
-  { params }: { params: { id: string } }
+  _req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { id } = await params;
     const session = await auth();
 
     if (!session?.user) {
@@ -23,38 +24,46 @@ export async function GET(
     }
 
     const campaigns = await prisma.campaign.findMany({
-      where: {
-        artistId: params.id,
-      },
+      where: { artistId: id },
       select: {
         id: true,
         title: true,
         status: true,
         totalBudget: true,
         remainingBudget: true,
+        commissionPercent: true,
+        durationDays: true,
+        payoutStatus: true,
         startDate: true,
         endDate: true,
+        createdAt: true,
+        completedAt: true,
+        song: {
+          select: {
+            id: true,
+            title: true,
+          },
+        },
         _count: {
           select: {
             submissions: true,
           },
         },
       },
-      orderBy: {
-        createdAt: "desc",
-      },
+      orderBy: { createdAt: "desc" },
     });
 
-    // Convert Decimal objects to numbers and dates to ISO strings for JSON serialization
-    const serializedCampaigns = campaigns.map((campaign) => ({
-      ...campaign,
-      totalBudget: Number(campaign.totalBudget),
-      remainingBudget: Number(campaign.remainingBudget),
-      startDate: campaign.startDate?.toISOString() ?? null,
-      endDate: campaign.endDate?.toISOString() ?? null,
+    const serialized = campaigns.map((c) => ({
+      ...c,
+      totalBudget: Number(c.totalBudget),
+      remainingBudget: Number(c.remainingBudget),
+      startDate: c.startDate?.toISOString() ?? null,
+      endDate: c.endDate?.toISOString() ?? null,
+      createdAt: c.createdAt.toISOString(),
+      completedAt: c.completedAt?.toISOString() ?? null,
     }));
 
-    return NextResponse.json({ campaigns: serializedCampaigns });
+    return NextResponse.json({ campaigns: serialized });
   } catch (error) {
     console.error("Error fetching user campaigns:", error);
     return NextResponse.json(
@@ -63,4 +72,3 @@ export async function GET(
     );
   }
 }
-

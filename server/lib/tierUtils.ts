@@ -18,9 +18,9 @@ interface BudgetBracket {
 }
 
 const BUDGET_BRACKETS: BudgetBracket[] = [
-    { minBudget: 100000, maxBudget: 1000000, commission: 10, reachMin: 20, reachMax: 35, likeMinRate: 0.06, likeMaxRate: 0.09, shareMinRate: 0.015, shareMaxRate: 0.022 },
-    { minBudget: 70000,  maxBudget: 99999,   commission: 12, reachMin: 15, reachMax: 28, likeMinRate: 0.05, likeMaxRate: 0.08, shareMinRate: 0.012, shareMaxRate: 0.018 },
-    { minBudget: 40000,  maxBudget: 69999,   commission: 15, reachMin: 12, reachMax: 22, likeMinRate: 0.05, likeMaxRate: 0.07, shareMinRate: 0.01,  shareMaxRate: 0.015 },
+    { minBudget: 100000, maxBudget: 1000000, commission: 20, reachMin: 20, reachMax: 35, likeMinRate: 0.06, likeMaxRate: 0.09, shareMinRate: 0.015, shareMaxRate: 0.022 },
+    { minBudget: 70000,  maxBudget: 99999,   commission: 20, reachMin: 15, reachMax: 28, likeMinRate: 0.05, likeMaxRate: 0.08, shareMinRate: 0.012, shareMaxRate: 0.018 },
+    { minBudget: 40000,  maxBudget: 69999,   commission: 20, reachMin: 12, reachMax: 22, likeMinRate: 0.05, likeMaxRate: 0.07, shareMinRate: 0.01,  shareMaxRate: 0.015 },
     { minBudget: 20000,  maxBudget: 39999,   commission: 20, reachMin: 8,  reachMax: 15, likeMinRate: 0.04, likeMaxRate: 0.06, shareMinRate: 0.008, shareMaxRate: 0.012 },
 ];
 
@@ -37,11 +37,11 @@ export function getBudgetBracket(budgetTL: number): BudgetBracket | null {
 
 /**
  * Get commission percentage based on budget amount
- * Same 4 brackets as before: 20k→20%, 40k→15%, 70k→12%, 100k→10%
+ * Fixed 20% commission for all valid budgets
  */
 export function getCommissionFromBudget(budgetTL: number): number | null {
-    const bracket = getBudgetBracket(budgetTL);
-    return bracket ? bracket.commission : null;
+    if (budgetTL < MIN_BUDGET_TL) return null;
+    return 20;
 }
 
 /**

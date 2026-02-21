@@ -68,7 +68,6 @@ async function main() {
   await prisma.song.deleteMany();
   await prisma.transaction.deleteMany();
   await prisma.notification.deleteMany();
-  await prisma.marketplaceUsage.deleteMany();
   await prisma.musicCache.deleteMany();
   await prisma.apiCallLog.deleteMany();
   await prisma.user.deleteMany();

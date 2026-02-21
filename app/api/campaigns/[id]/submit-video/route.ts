@@ -12,9 +12,10 @@ import { prisma } from '@/lib/prisma';
 
 export async function POST(
     req: NextRequest,
-    { params }: { params: { id: string } }
+    { params }: { params: Promise<{ id: string }> }
 ) {
     try {
+        const { id } = await params;
         const session = await auth();
 
         if (!session?.user?.id) {
@@ -30,11 +31,11 @@ export async function POST(
             );
         }
 
-        console.log(`[Video Submit] Campaign: ${params.id}, URL: ${videoUrl}`);
+        console.log(`[Video Submit] Campaign: ${id}, URL: ${videoUrl}`);
 
         // Get campaign
         const campaign = await prisma.campaign.findUnique({
-            where: { id: params.id },
+            where: { id },
             include: { song: true },
         });
 
@@ -53,7 +54,7 @@ export async function POST(
         const existingSubmission = await prisma.submission.findUnique({
             where: {
                 campaignId_creatorId: {
-                    campaignId: params.id,
+                    campaignId: id,
                     creatorId: session.user.id,
                 },
             },

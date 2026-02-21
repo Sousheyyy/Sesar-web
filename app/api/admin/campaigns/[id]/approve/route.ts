@@ -1,31 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
+import { requireAdmin } from "@/lib/auth-utils";
 import { prisma } from "@/lib/prisma";
-import { UserRole } from "@prisma/client";
+import { logAdminAction } from "@/lib/audit-log";
 
 // Force dynamic rendering for Cloudflare Pages
 export const dynamic = 'force-dynamic';
 
 export async function POST(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const session = await auth();
-
-    if (!session?.user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
-    if (session.user.role !== UserRole.ADMIN) {
-      return NextResponse.json(
-        { error: "Admin access required" },
-        { status: 403 }
-      );
-    }
+    const { id } = await params;
+    const admin = await requireAdmin();
 
     const campaign = await prisma.campaign.findUnique({
-      where: { id: params.id },
+      where: { id },
     });
 
     if (!campaign) {
@@ -50,20 +40,26 @@ export async function POST(
 
     // Approve the campaign with dates
     const updatedCampaign = await prisma.campaign.update({
-      where: { id: params.id },
+      where: { id },
       data: {
         status: "ACTIVE",
         startDate: actualStart,
         endDate: endDate,
       },
-      include: {
-        song: true,
+      select: {
+        id: true,
+        title: true,
+        status: true,
+        startDate: true,
+        endDate: true,
+        durationDays: true,
+        totalBudget: true,
+        artistId: true,
+        song: {
+          select: { id: true, title: true },
+        },
         artist: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-          },
+          select: { id: true, name: true },
         },
       },
     });
@@ -77,6 +73,8 @@ export async function POST(
         link: `/artist/campaigns/${campaign.id}`,
       },
     });
+
+    logAdminAction(admin.id, admin.email, "CAMPAIGN_APPROVE", "Campaign", id, { title: campaign.title });
 
     return NextResponse.json(updatedCampaign);
   } catch (error) {

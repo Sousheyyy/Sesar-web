@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Play, Pause, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import { ConfirmActionModal } from "@/components/admin/confirm-action-modal";
 
 interface AdminCampaignHeaderActionsProps {
   campaignId: string;
@@ -15,6 +16,7 @@ export function AdminCampaignHeaderActions({ campaignId, currentStatus }: AdminC
   const router = useRouter();
   const [isLoading, setIsLoading] = useState(false);
   const [status, setStatus] = useState(currentStatus);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   const handlePause = async () => {
     if (!confirm("Bu kampanyayı duraklatmak istediğinizden emin misiniz?")) {
@@ -73,10 +75,7 @@ export function AdminCampaignHeaderActions({ campaignId, currentStatus }: AdminC
   };
 
   const handleDelete = async () => {
-    if (!confirm("Bu kampanyayı silmek istediğinizden emin misiniz? Bu işlem geri alınamaz.")) {
-      return;
-    }
-
+    setShowDeleteConfirm(false);
     setIsLoading(true);
     try {
       const response = await fetch(`/api/campaigns/${campaignId}`, {
@@ -133,12 +132,19 @@ export function AdminCampaignHeaderActions({ campaignId, currentStatus }: AdminC
         variant="destructive"
         size="sm"
         className="gap-2"
-        onClick={handleDelete}
+        onClick={() => setShowDeleteConfirm(true)}
         disabled={isLoading}
       >
         <Trash2 className="h-4 w-4" />
         Sil
       </Button>
+      <ConfirmActionModal
+        isOpen={showDeleteConfirm}
+        onConfirm={handleDelete}
+        onCancel={() => setShowDeleteConfirm(false)}
+        title="Kampanyayı Sil"
+        description="Bu işlem geri alınamaz. Devam etmek için şifrenizi girin."
+      />
     </div>
   );
 }

@@ -50,6 +50,7 @@ enum TransactionType {
   EARNING
   SPEND
   REFUND
+  ADJUSTMENT
 }
 
 enum TransactionStatus {
@@ -104,10 +105,6 @@ model User {
   subscriptionEndsAt DateTime?
   cycleStartDate DateTime @default(now()) // For free plan limits
   
-  // Marketplace
-  couponBalance Int       @default(0)
-  usages        MarketplaceUsage[]
-  
   // InsightIQ session status
   insightiqSessionExpired Boolean @default(false) // Set true when SESSION.EXPIRED webhook received
 
@@ -117,11 +114,12 @@ model User {
   lastLoginAt   DateTime?
 
   // Relations
-  songs         Song[]
-  campaigns     Campaign[]
-  submissions   Submission[]
-  transactions  Transaction[]
-  notifications Notification[]
+  songs           Song[]
+  campaigns       Campaign[]
+  submissions     Submission[]
+  transactions    Transaction[]
+  notifications   Notification[]
+  contactMessages ContactMessage[]
 
   @@index([email])
   @@index([role])
@@ -382,6 +380,21 @@ model Notification {
   @@index([createdAt])
 }
 
+model ContactMessage {
+  id        String   @id @default(cuid())
+  userId    String?
+  name      String?
+  email     String
+  subject   String
+  message   String   @db.Text
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([read])
+  @@index([createdAt])
+}
+
 model SystemSettings {
   id          String   @id @default(cuid())
   key         String   @unique
@@ -428,25 +441,19 @@ enum UserPlan {
   ARTIST
 }
 
-enum MarketplaceToolType {
-  PROFILE
-  HASHTAG
-  VALUATION
-  AUDIT
-  COMPARE
-}
+model AdminAuditLog {
+  id          String   @id @default(cuid())
+  adminId     String
+  adminEmail  String
+  action      String   // CAMPAIGN_APPROVE, CAMPAIGN_REJECT, TRANSACTION_APPROVE, etc.
+  targetType  String   // Campaign, Transaction, User, Settings
+  targetId    String?
+  details     Json?    // Contextual info (e.g., { reason: "...", amount: 100 })
+  ipAddress   String?
+  createdAt   DateTime @default(now())
 
-model MarketplaceUsage {
-  id              String             @id @default(cuid())
-  user            User               @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId          String
-  
-  toolType        MarketplaceToolType
-  input           String             // e.g., username, video URL
-  resultSnapshot  Json               // Store full analysis result for history
-  
-  createdAt       DateTime           @default(now())
-  
-  @@index([userId])
-  @@index([toolType])
+  @@index([adminId])
+  @@index([action])
+  @@index([createdAt])
+  @@index([targetType])
 }

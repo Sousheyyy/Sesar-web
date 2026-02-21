@@ -1,11 +1,11 @@
 "use client";
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { AlertTriangle, CheckCircle, Clock, DollarSign } from "lucide-react";
+import { AlertTriangle, CheckCircle, Clock } from "lucide-react";
 import Link from "next/link";
 import { formatCurrency } from "@/lib/utils";
+import { TLIcon } from "@/components/icons/tl-icon";
 
 interface Alert {
   id: string;
@@ -20,8 +20,6 @@ interface Alert {
 
 interface AlertsSectionProps {
   alerts: Alert[];
-  title?: string;
-  description?: string;
 }
 
 const ALERT_ICONS = {
@@ -31,95 +29,72 @@ const ALERT_ICONS = {
   error: AlertTriangle,
 };
 
-const ALERT_COLORS = {
-  warning: "text-yellow-600",
-  info: "text-blue-600",
-  success: "text-green-600",
-  error: "text-red-600",
+const ALERT_STYLES = {
+  warning: {
+    bg: "bg-yellow-500/10 border-yellow-500/20",
+    icon: "text-yellow-400",
+    badge: "bg-yellow-500/20 text-yellow-300 border-yellow-500/30",
+  },
+  info: {
+    bg: "bg-blue-500/10 border-blue-500/20",
+    icon: "text-blue-400",
+    badge: "bg-blue-500/20 text-blue-300 border-blue-500/30",
+  },
+  success: {
+    bg: "bg-green-500/10 border-green-500/20",
+    icon: "text-green-400",
+    badge: "bg-green-500/20 text-green-300 border-green-500/30",
+  },
+  error: {
+    bg: "bg-red-500/10 border-red-500/20",
+    icon: "text-red-400",
+    badge: "bg-red-500/20 text-red-300 border-red-500/30",
+  },
 };
 
-const ALERT_BG_COLORS = {
-  warning: "bg-yellow-50 border-yellow-200",
-  info: "bg-blue-50 border-blue-200",
-  success: "bg-green-50 border-green-200",
-  error: "bg-red-50 border-red-200",
-};
-
-export function AlertsSection({
-  alerts,
-  title = "Uyarılar ve Bildirimler",
-  description = "Dikkat gerektiren öğeler",
-}: AlertsSectionProps) {
-  if (alerts.length === 0) {
-    return (
-      <Card>
-        <CardHeader>
-          <CardTitle>{title}</CardTitle>
-          <CardDescription>{description}</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="flex items-center justify-center py-8 text-sm text-muted-foreground">
-            <CheckCircle className="h-5 w-5 mr-2 text-green-600" />
-            Tüm sistemler normal çalışıyor
-          </div>
-        </CardContent>
-      </Card>
-    );
-  }
+export function AlertsSection({ alerts }: AlertsSectionProps) {
+  if (alerts.length === 0) return null;
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{title}</CardTitle>
-        <CardDescription>{description}</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <div className="space-y-3">
-          {alerts.map((alert) => {
-            const Icon = ALERT_ICONS[alert.type];
-            return (
-              <div
-                key={alert.id}
-                className={`rounded-lg border p-4 ${ALERT_BG_COLORS[alert.type]}`}
-              >
-                <div className="flex items-start justify-between">
-                  <div className="flex items-start gap-3 flex-1">
-                    <Icon className={`h-5 w-5 mt-0.5 ${ALERT_COLORS[alert.type]}`} />
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-1">
-                        <h4 className="font-semibold text-sm">{alert.title}</h4>
-                        {alert.count !== undefined && (
-                          <Badge variant="outline">{alert.count}</Badge>
-                        )}
-                        {alert.amount !== undefined && (
-                          <Badge variant="outline">
-                            <DollarSign className="h-3 w-3 mr-1" />
-                            {formatCurrency(alert.amount)}
-                          </Badge>
-                        )}
-                      </div>
-                      <p className="text-sm text-muted-foreground">{alert.message}</p>
-                    </div>
-                  </div>
-                  {alert.link && (
-                    <Link href={alert.link}>
-                      <Button variant="outline" size="sm">
-                        {alert.linkText || "Görüntüle"}
-                      </Button>
-                    </Link>
+    <div className="space-y-2">
+      {alerts.map((alert) => {
+        const Icon = ALERT_ICONS[alert.type];
+        const styles = ALERT_STYLES[alert.type];
+        return (
+          <div
+            key={alert.id}
+            className={`rounded-lg border p-4 ${styles.bg}`}
+          >
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex items-center gap-3 flex-1 min-w-0">
+                <Icon className={`h-5 w-5 shrink-0 ${styles.icon}`} />
+                <div className="flex items-center gap-2 flex-wrap min-w-0">
+                  <h4 className="font-semibold text-sm text-white">{alert.title}</h4>
+                  {alert.count !== undefined && (
+                    <Badge variant="outline" className={styles.badge}>
+                      {alert.count}
+                    </Badge>
                   )}
+                  {alert.amount !== undefined && (
+                    <Badge variant="outline" className={styles.badge}>
+                      <TLIcon className="h-3 w-3 mr-0.5" />
+                      {formatCurrency(alert.amount)}
+                    </Badge>
+                  )}
+                  <span className="text-sm text-zinc-400 hidden sm:inline">{alert.message}</span>
                 </div>
               </div>
-            );
-          })}
-        </div>
-      </CardContent>
-    </Card>
+              {alert.link && (
+                <Link href={alert.link}>
+                  <Button variant="outline" size="sm" className="border-white/10 text-zinc-300 hover:text-white hover:bg-white/10 shrink-0">
+                    {alert.linkText || "Görüntüle"}
+                  </Button>
+                </Link>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
   );
 }
-
-
-
-
-
-

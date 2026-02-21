@@ -170,14 +170,14 @@ async function handleContentsUpdated(
   const items = data.items || [];
   if (items.length === 0) return;
 
-  // Match content IDs to our submissions in active, non-locked campaigns
+  // Match content IDs to our submissions in active campaigns (including locked)
+  // Locked campaigns still need metric updates before final distribution
   const submissions = await prisma.submission.findMany({
     where: {
       insightiqContentId: { in: items },
       status: "APPROVED",
       campaign: {
         status: "ACTIVE",
-        lockedAt: null,
       },
     },
     include: { campaign: true },
@@ -383,32 +383,4 @@ async function fetchContentItemsBulk(
   return result;
 }
 
-/**
- * Trigger on-demand refresh for an InsightIQ account.
- * Used by the pre-distribute cron at 23:00.
- */
-export async function triggerInsightIQRefresh(accountId: string): Promise<void> {
-  const baseUrl = process.env.INSIGHTIQ_BASE_URL || "https://api.insightiq.ai";
-  const apiKey = process.env.INSIGHTIQ_API_KEY;
-  const apiSecret = process.env.INSIGHTIQ_API_SECRET;
-
-  if (!apiKey || !apiSecret) {
-    throw new Error("InsightIQ API credentials not configured");
-  }
-
-  const authHeader = "Basic " + Buffer.from(`${apiKey}:${apiSecret}`).toString("base64");
-
-  const res = await fetch(`${baseUrl}/v1/social/contents/refresh`, {
-    method: "POST",
-    headers: {
-      Authorization: authHeader,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ account_id: accountId }),
-  });
-
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`InsightIQ refresh failed (${res.status}): ${body}`);
-  }
-}
+// triggerInsightIQRefresh moved to lib/insightiq.ts
