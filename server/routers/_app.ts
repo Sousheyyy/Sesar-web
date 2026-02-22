@@ -42,7 +42,7 @@ export const appRouter = t.router({
   getUser: t.procedure
     .input(z.object({ userId: z.string() }))
     .query(async ({ input, ctx }) => {
-      const callerId = ctx.user?.id;
+      const callerId = ctx.userId;
       if (!callerId) throw new Error("UNAUTHORIZED");
       if (callerId !== input.userId) throw new Error("FORBIDDEN");
 
@@ -76,7 +76,7 @@ export const appRouter = t.router({
       tiktokHandle: z.string().optional(),
     }))
     .mutation(async ({ input, ctx }) => {
-      const userId = ctx.user?.id;
+      const userId = ctx.userId;
       if (!userId) {
         throw new Error("UNAUTHORIZED");
       }
@@ -98,9 +98,19 @@ export const appRouter = t.router({
       userId: z.string(),
       email: z.string().email(),
       name: z.string().optional(),
+      role: z.enum(['CREATOR', 'ARTIST']).optional(),
+      bio: z.string().max(500).optional(),
+      tiktokHandle: z.string().optional(),
+      instagramHandle: z.string().optional(),
+      youtubeHandle: z.string().optional(),
     }))
-    .mutation(async ({ input }) => {
-      // Check if user already exists
+    .mutation(async ({ input, ctx }) => {
+      // Validate: authenticated users can only create their own record
+      if (ctx.userId && ctx.userId !== input.userId) {
+        throw new Error("FORBIDDEN");
+      }
+
+      // Idempotent: return existing user if already created
       const existing = await prisma.user.findUnique({
         where: { id: input.userId }
       });
@@ -109,17 +119,22 @@ export const appRouter = t.router({
         return existing;
       }
 
-      // Create new user in database
+      const userRole = input.role || 'CREATOR';
+
       const user = await prisma.user.create({
         data: {
           id: input.userId,
           email: input.email,
-          password: 'supabase-auth', // Not used, Supabase handles auth
-          name: input.name || 'içerik üreticisi',
-          role: 'CREATOR',
+          password: 'supabase-auth',
+          name: input.name || (userRole === 'ARTIST' ? 'Sanatçı' : 'İçerik Üreticisi'),
+          role: userRole,
           balance: 0,
-          plan: 'FREE',
-          cycleStartDate: new Date()
+          plan: userRole === 'ARTIST' ? 'ARTIST' : 'FREE',
+          cycleStartDate: new Date(),
+          bio: input.bio,
+          tiktokHandle: input.tiktokHandle?.replace('@', ''),
+          instagramHandle: input.instagramHandle?.replace('@', ''),
+          youtubeHandle: input.youtubeHandle?.replace('@', ''),
         }
       });
 
@@ -197,7 +212,7 @@ export const appRouter = t.router({
       endedOnly: z.boolean().optional() // Filter for ended campaigns only
     }).optional())
     .query(async ({ ctx, input }) => {
-      const userId = ctx.user?.id;
+      const userId = ctx.userId;
       if (!userId) return { campaigns: [], nextCursor: null };
 
       const limit = input?.limit || 20;
@@ -285,7 +300,7 @@ export const appRouter = t.router({
 
   getCampaignCounts: t.procedure
     .query(async ({ ctx }) => {
-      const userId = ctx.user?.id;
+      const userId = ctx.userId;
       if (!userId) throw new Error("UNAUTHORIZED");
 
       const [activeCount, myActiveCount, joinedActiveCount] = await Promise.all([
@@ -327,7 +342,7 @@ export const appRouter = t.router({
   getCampaignById: t.procedure
     .input(z.object({ id: z.string() }))
     .query(async ({ input, ctx }) => {
-      const userId = ctx.user?.id;
+      const userId = ctx.userId;
 
       // 1. Fetch Campaign Base Info
       const campaign = await prisma.campaign.findUnique({
@@ -581,7 +596,7 @@ export const appRouter = t.router({
     }))
     .query(async ({ input, ctx }) => {
       const { id, period } = input;
-      const userId = ctx.user?.id;
+      const userId = ctx.userId;
       if (!userId) throw new Error("UNAUTHORIZED");
 
       const campaign = await prisma.campaign.findUnique({
@@ -708,7 +723,7 @@ export const appRouter = t.router({
   getSubmittedCampaign: t.procedure
     .input(z.object({ id: z.string() }))
     .query(async ({ input, ctx }) => {
-      const userId = ctx.user?.id;
+      const userId = ctx.userId;
       if (!userId) throw new Error("UNAUTHORIZED");
 
       const campaign = await prisma.campaign.findUnique({
@@ -791,7 +806,7 @@ export const appRouter = t.router({
       tiktokUrl: z.string().url()
     }))
     .mutation(async ({ ctx, input }) => {
-      if (!ctx.user) throw new Error("UNAUTHORIZED");
+      if (!ctx.userId) throw new Error("UNAUTHORIZED");
 
       const campaign = await prisma.campaign.findUnique({
         where: { id: input.campaignId },
@@ -800,7 +815,7 @@ export const appRouter = t.router({
       if (!campaign) throw new Error("CAMPAIGN_NOT_FOUND");
 
       const user = await prisma.user.findUnique({
-        where: { id: ctx.user.id },
+        where: { id: ctx.userId },
         select: { tiktokHandle: true, tiktokUserId: true }
       });
       if (!user) throw new Error("USER_NOT_FOUND");
@@ -892,7 +907,7 @@ export const appRouter = t.router({
     }))
     .mutation(async ({ input, ctx }) => {
       // Validate user is logged in
-      const userId = ctx.user?.id;
+      const userId = ctx.userId;
       if (!userId) {
         throw new Error("UNAUTHORIZED");
       }
@@ -1031,7 +1046,7 @@ export const appRouter = t.router({
       submissionId: z.string()
     }))
     .mutation(async ({ input, ctx }) => {
-      const userId = ctx.user?.id;
+      const userId = ctx.userId;
       if (!userId) throw new Error("UNAUTHORIZED");
 
       // 1. Verify ownership
@@ -1079,7 +1094,7 @@ export const appRouter = t.router({
       desiredStartDate: z.string().datetime(), // ISO date string, min 3 days from now
     }))
     .mutation(async ({ input, ctx }) => {
-      const userId = ctx.user?.id;
+      const userId = ctx.userId;
       if (!userId) {
         throw new Error("UNAUTHORIZED");
       }
@@ -1202,7 +1217,7 @@ export const appRouter = t.router({
       endedOnly: z.boolean().optional() // Filter for ended campaigns only
     }).optional())
     .query(async ({ ctx, input }) => {
-      const userId = ctx.user?.id;
+      const userId = ctx.userId;
       if (!userId) return { campaigns: [], nextCursor: null };
 
       const limit = input?.limit || 20;
@@ -1275,7 +1290,7 @@ export const appRouter = t.router({
 
   getCreatorStats: t.procedure
     .query(async ({ ctx }) => {
-      const userId = ctx.user?.id;
+      const userId = ctx.userId;
       if (!userId) throw new Error("UNAUTHORIZED");
 
       // Fetch user info for tier, follower count, and plan
@@ -1403,7 +1418,7 @@ export const appRouter = t.router({
 
   getArtistStats: t.procedure
     .query(async ({ ctx }) => {
-      const userId = ctx.user?.id;
+      const userId = ctx.userId;
       if (!userId) throw new Error("UNAUTHORIZED");
 
       // OPTIMIZED: Parallelize all independent queries
@@ -1492,7 +1507,7 @@ export const appRouter = t.router({
 
   getActivity: t.procedure
     .query(async ({ ctx }) => {
-      const userId = ctx.user?.id;
+      const userId = ctx.userId;
       if (!userId) throw new Error("UNAUTHORIZED");
 
       const user = await prisma.user.findUnique({ where: { id: userId } });
@@ -1535,7 +1550,7 @@ export const appRouter = t.router({
 
   upgradeToPro: t.procedure
     .mutation(async ({ ctx }) => {
-      const userId = ctx.user?.id;
+      const userId = ctx.userId;
       if (!userId) throw new Error("UNAUTHORIZED");
       // Mock success for credit card flow
       const updatedUser = await prisma.user.update({
@@ -1547,7 +1562,7 @@ export const appRouter = t.router({
 
   upgradeToProWithBalance: t.procedure
     .mutation(async ({ ctx }) => {
-      const userId = ctx.user?.id;
+      const userId = ctx.userId;
       if (!userId) throw new Error("UNAUTHORIZED");
 
       const user = await prisma.user.findUnique({ where: { id: userId } });
@@ -1593,7 +1608,7 @@ export const appRouter = t.router({
       reason: z.string().min(1, "Rejection reason is required"),
     }))
     .mutation(async ({ input, ctx }) => {
-      const userId = ctx.user?.id;
+      const userId = ctx.userId;
       if (!userId) throw new Error("UNAUTHORIZED");
 
       const admin = await prisma.user.findUnique({ where: { id: userId } });
@@ -1641,7 +1656,7 @@ export const appRouter = t.router({
   approveCampaign: t.procedure
     .input(z.object({ campaignId: z.string() }))
     .mutation(async ({ input, ctx }) => {
-      const userId = ctx.user?.id;
+      const userId = ctx.userId;
       if (!userId) throw new Error("UNAUTHORIZED");
 
       const admin = await prisma.user.findUnique({ where: { id: userId } });
@@ -1686,7 +1701,7 @@ export const appRouter = t.router({
       desiredStartDate: z.string().datetime().optional(),
     }))
     .mutation(async ({ input, ctx }) => {
-      const userId = ctx.user?.id;
+      const userId = ctx.userId;
       if (!userId) throw new Error("UNAUTHORIZED");
 
       const campaign = await prisma.campaign.findUnique({
@@ -1727,7 +1742,7 @@ export const appRouter = t.router({
   cancelCampaign: t.procedure
     .input(z.object({ campaignId: z.string() }))
     .mutation(async ({ input, ctx }) => {
-      const userId = ctx.user?.id;
+      const userId = ctx.userId;
       if (!userId) throw new Error("UNAUTHORIZED");
 
       const campaign = await prisma.campaign.findUnique({
@@ -1774,7 +1789,7 @@ export const appRouter = t.router({
       redirectUrl: z.string().optional(),
     }).optional())
     .mutation(async ({ ctx, input }) => {
-    const userId = ctx.user?.id;
+    const userId = ctx.userId;
     if (!userId) throw new Error("UNAUTHORIZED");
 
     const INSIGHTIQ_BASE_URL = process.env.INSIGHTIQ_BASE_URL || "https://api.staging.insightiq.ai";
@@ -1877,7 +1892,7 @@ export const appRouter = t.router({
       accountId: z.string(),
     }))
     .mutation(async ({ ctx, input }) => {
-      const userId = ctx.user?.id;
+      const userId = ctx.userId;
       if (!userId) throw new Error("UNAUTHORIZED");
 
       const INSIGHTIQ_BASE_URL = process.env.INSIGHTIQ_BASE_URL || "https://api.staging.insightiq.ai";
@@ -1976,7 +1991,7 @@ export const appRouter = t.router({
   // Disconnect InsightIQ account
   disconnectInsightIQAccount: t.procedure.mutation(async ({ ctx }) => {
     console.log("[DisconnectInsightIQ] Starting disconnect mutation...");
-    const userId = ctx.user?.id;
+    const userId = ctx.userId;
     console.log("[DisconnectInsightIQ] User ID:", userId);
 
     if (!userId) {
