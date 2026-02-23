@@ -54,7 +54,6 @@ export async function POST(req: NextRequest) {
                 tiktokUserId: true,
                 avatar: true,
                 role: true,
-                creatorTier: true,
                 balance: true,
             }
         });
@@ -80,7 +79,6 @@ export async function POST(req: NextRequest) {
                     tiktokHandle: user.tiktokHandle,
                     avatar: user.avatar,
                     role: user.role,
-                    creatorTier: user.creatorTier,
                     balance: Number(user.balance) || 0,
                 }
             });
@@ -115,7 +113,6 @@ export async function POST(req: NextRequest) {
                 tiktokUserId: true,
                 avatar: true,
                 role: true,
-                creatorTier: true,
                 balance: true,
             }
         });
@@ -132,7 +129,6 @@ export async function POST(req: NextRequest) {
                 tiktokHandle: user.tiktokHandle,
                 avatar: user.avatar,
                 role: user.role,
-                creatorTier: user.creatorTier,
                 balance: Number(user.balance) || 0,
             }
         });

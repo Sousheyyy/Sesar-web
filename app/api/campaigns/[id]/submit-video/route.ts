@@ -1,5 +1,5 @@
 /**
- * Video Submission (Simplified - InsightIQ Integration Removed)
+ * Video Submission (Simplified - uses Apify for data fetching)
  * POST /api/campaigns/[id]/submit-video
  *
  * Creator submits video URL for manual verification

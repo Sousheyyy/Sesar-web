@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { calculateCampaignPayouts } from "@/lib/payout";
-import { triggerInsightIQRefresh } from "@/lib/insightiq";
+import { apifyClient } from "@/lib/apify/client";
 import { auth } from "@/lib/auth";
 import { UserRole } from "@prisma/client";
 
@@ -19,7 +19,7 @@ const GRACE_PERIOD_MS = 30 * 60 * 1000; // 30 min after endDate before distribut
  *
  * Phase A: Lock campaigns approaching endDate (1 hour before)
  *   → Prevents new submissions
- *   → Triggers InsightIQ on-demand refresh for final metrics
+ *   → Triggers Apify on-demand refresh for final metrics
  *
  * Phase B: Distribute locked campaigns past endDate + 30 min grace
  *   → Insurance check → Eligibility → Robin Hood → Wallet payouts
@@ -81,40 +81,41 @@ async function lockOneCampaign(): Promise<LockResult | null> {
     `[Lifecycle] Locked campaign ${campaign.id} (${campaign.submissions.length} submissions)`
   );
 
-  // Gather unique InsightIQ account IDs
-  const accountIds = new Set<string>();
-  const creatorIds = campaign.submissions.map((s) => s.creatorId);
-
-  if (creatorIds.length > 0) {
-    const creators = await prisma.user.findMany({
-      where: { id: { in: creatorIds } },
-      select: { tiktokUserId: true },
-    });
-
-    for (const creator of creators) {
-      if (creator.tiktokUserId) {
-        accountIds.add(creator.tiktokUserId);
-      }
-    }
-  }
-
-  // Trigger InsightIQ on-demand refresh for each account
+  // Refresh metrics for each approved submission via Apify
   const refreshErrors: string[] = [];
+  let refreshedCount = 0;
 
-  for (const accountId of accountIds) {
+  // Fetch submissions with their TikTok URLs
+  const submissions = await prisma.submission.findMany({
+    where: { campaignId: campaign.id, status: "APPROVED" },
+    select: { id: true, tiktokUrl: true },
+  });
+
+  for (const sub of submissions) {
     try {
-      await triggerInsightIQRefresh(accountId);
+      const { video } = await apifyClient.fetchVideoData(sub.tiktokUrl);
+      await prisma.submission.update({
+        where: { id: sub.id },
+        data: {
+          lastViewCount: video.stats.playCount,
+          lastLikeCount: video.stats.diggCount,
+          lastCommentCount: video.stats.commentCount,
+          lastShareCount: video.stats.shareCount,
+          lastCheckedAt: new Date(),
+        },
+      });
+      refreshedCount++;
 
       await prisma.metricFetchLog.create({
         data: {
           campaignId: campaign.id,
           source: "ON_DEMAND",
           status: "SUCCESS",
-          errorMessage: `Triggered refresh for account ${accountId}`,
+          errorMessage: `Refreshed submission ${sub.id} via Apify`,
         },
       });
     } catch (error: any) {
-      const msg = `${accountId}: ${error.message}`;
+      const msg = `${sub.id}: ${error.message}`;
       refreshErrors.push(msg);
 
       await prisma.metricFetchLog.create({
@@ -122,7 +123,7 @@ async function lockOneCampaign(): Promise<LockResult | null> {
           campaignId: campaign.id,
           source: "ON_DEMAND",
           status: "FAILED",
-          errorMessage: `Failed refresh for account ${accountId}: ${error.message}`,
+          errorMessage: `Failed refresh for submission ${sub.id}: ${error.message}`,
         },
       });
 
@@ -133,7 +134,7 @@ async function lockOneCampaign(): Promise<LockResult | null> {
   return {
     campaignId: campaign.id,
     submissionCount: campaign.submissions.length,
-    accountsRefreshed: accountIds.size,
+    accountsRefreshed: refreshedCount,
     refreshErrors,
   };
 }

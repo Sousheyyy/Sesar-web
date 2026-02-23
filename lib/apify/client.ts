@@ -12,6 +12,27 @@ interface MusicMetadata {
   tiktokMusicId: string;
 }
 
+export interface VideoData {
+  videoId: string;
+  authorUniqueId: string;       // @username (for owner match)
+  authorNickname: string;       // display name
+  coverImage: string;
+  duration: number;             // seconds
+  createTime: number;           // unix timestamp
+  isPrivate: boolean;
+  stats: {
+    playCount: number;
+    diggCount: number;          // likes
+    shareCount: number;
+    commentCount: number;
+  };
+  music: {
+    title: string;
+    id: string;                 // music ID for song match
+    authorName: string;
+  };
+}
+
 interface ApifyRunResponse {
   data: {
     id: string;
@@ -27,7 +48,12 @@ export class ApifyClient {
     return token;
   }
 
-  private getActorId(): string {
+  private getMusicActorId(): string {
+    return process.env.APIFY_TIKTOK_SOUND_SCRAPER_ACTOR_ID!;
+  }
+
+  private getVideoActorId(): string {
+    // Same scraptik/tiktok-api actor handles both music and video requests
     return process.env.APIFY_TIKTOK_SOUND_SCRAPER_ACTOR_ID!;
   }
 
@@ -47,7 +73,7 @@ export class ApifyClient {
       }
 
       const token = this.getToken();
-      const actorId = this.getActorId();
+      const actorId = this.getMusicActorId();
       const timeoutSecs = Math.floor(this.getTimeout() / 1000);
 
       // 2. Start actor run and wait for it to finish
@@ -145,6 +171,123 @@ export class ApifyClient {
     }
   }
 
+  /**
+   * Fetches video details from a TikTok video URL via the scraptik/tiktok-api actor.
+   * Used for video validation (owner match, song match, public status) and metric collection.
+   */
+  async fetchVideoData(
+    videoUrl: string,
+    retries = 3
+  ): Promise<{ video: VideoData; apifyRunId: string }> {
+    try {
+      const token = this.getToken();
+      const actorId = this.getVideoActorId();
+      const timeoutSecs = Math.floor(this.getTimeout() / 1000);
+
+      // Start actor run with the video URL
+      const runRes = await fetch(
+        `${APIFY_BASE_URL}/acts/${actorId}/runs?waitForFinish=${timeoutSecs}`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            urls: [videoUrl],
+            type: 'video',
+          }),
+        }
+      );
+
+      if (!runRes.ok) {
+        const body = await runRes.text();
+        throw new Error(`Apify API error ${runRes.status}: ${body.substring(0, 200)}`);
+      }
+
+      const run: ApifyRunResponse = await runRes.json();
+      const apifyRunId = run.data.id;
+
+      if (run.data.status !== 'SUCCEEDED') {
+        throw new Error(`Apify run failed with status: ${run.data.status}`);
+      }
+
+      // Fetch results from dataset
+      const datasetRes = await fetch(
+        `${APIFY_BASE_URL}/datasets/${run.data.defaultDatasetId}/items?format=json`,
+        {
+          headers: { 'Authorization': `Bearer ${token}` },
+        }
+      );
+
+      if (!datasetRes.ok) {
+        throw new Error(`Failed to fetch Apify dataset: ${datasetRes.status}`);
+      }
+
+      const items: any[] = await datasetRes.json();
+
+      if (!items || items.length === 0) {
+        throw new Error('No video data found for this TikTok URL');
+      }
+
+      const raw = items[0];
+
+      // Normalize the response — scraptik/tiktok-api returns TikTok's internal format
+      const video: VideoData = {
+        videoId: raw.id || raw.video_id || String(raw.aweme_id || ''),
+        authorUniqueId: raw.author?.uniqueId || raw.author?.unique_id || '',
+        authorNickname: raw.author?.nickname || '',
+        coverImage: raw.video?.cover?.url_list?.[0] || raw.video?.origin_cover?.url_list?.[0] || '',
+        duration: raw.video?.duration || raw.duration || 0,
+        createTime: raw.createTime || raw.create_time || 0,
+        isPrivate: raw.is_private ?? raw.isPrivate ?? false,
+        stats: {
+          playCount: raw.stats?.playCount ?? raw.statistics?.play_count ?? 0,
+          diggCount: raw.stats?.diggCount ?? raw.statistics?.digg_count ?? 0,
+          shareCount: raw.stats?.shareCount ?? raw.statistics?.share_count ?? 0,
+          commentCount: raw.stats?.commentCount ?? raw.statistics?.comment_count ?? 0,
+        },
+        music: {
+          title: raw.music?.title || '',
+          id: raw.music?.id ? String(raw.music.id) : (raw.music?.id_str || ''),
+          authorName: raw.music?.authorName || raw.music?.author || '',
+        },
+      };
+
+      // Validate essential fields
+      if (!video.videoId) {
+        throw new Error('Could not extract video ID from Apify response');
+      }
+      if (!video.authorUniqueId) {
+        throw new Error('Could not extract author username from Apify response');
+      }
+
+      console.log('Apify video data extracted:', {
+        videoId: video.videoId,
+        author: video.authorUniqueId,
+        musicTitle: video.music.title,
+        views: video.stats.playCount,
+      });
+
+      return { video, apifyRunId };
+
+    } catch (error: any) {
+      if (retries > 0 && this.isRetryableError(error)) {
+        console.log(`Retrying Apify video fetch... (${retries} attempts left)`);
+        await this.sleep(1000 * (4 - retries));
+        return this.fetchVideoData(videoUrl, retries - 1);
+      }
+
+      console.error('Apify video fetch failed:', {
+        url: videoUrl,
+        error: error.message,
+        retries,
+      });
+
+      throw new ApifyError(this.getVideoUserFriendlyMessage(error), error);
+    }
+  }
+
   private isRetryableError(error: any): boolean {
     const message = error.message?.toLowerCase() || '';
     return (
@@ -174,6 +317,28 @@ export class ApifyClient {
     }
 
     return 'Müzik bilgileri alınamadı. Lütfen linki kontrol edip tekrar deneyin.';
+  }
+
+  private getVideoUserFriendlyMessage(error: any): string {
+    const message = error.message?.toLowerCase() || '';
+
+    if (message.includes('timeout')) {
+      return 'Video bilgileri alınamadı. TikTok yanıt vermiyor, lütfen tekrar deneyin.';
+    }
+    if (message.includes('no video data')) {
+      return 'Video bulunamadı. Linki kontrol edin.';
+    }
+    if (message.includes('video id')) {
+      return 'Video bilgileri okunamadı. Farklı bir link deneyin.';
+    }
+    if (message.includes('author username')) {
+      return 'Video sahibi bilgisi alınamadı. Videonun herkese açık olduğundan emin olun.';
+    }
+    if (error.statusCode === 429) {
+      return 'Çok fazla istek gönderildi. Lütfen birkaç dakika bekleyin.';
+    }
+
+    return 'Video bilgileri alınamadı. Lütfen linki kontrol edip tekrar deneyin.';
   }
 
   private sleep(ms: number): Promise<void> {

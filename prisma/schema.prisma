@@ -70,8 +70,6 @@ model User {
   role          UserRole  @default(CREATOR)
   balance       Decimal   @default(0) @db.Decimal(10, 2)
   
-  // Creator Tier (based on followers)
-  creatorTier   Tier?     // D: <1k, C: 1k-3k, B: 3k-5k, A: 5k-10k, S: 10k+
   followerCount Int       @default(0)
   followingCount Int      @default(0) // ADDED
   totalLikes    Int       @default(0) // ADDED
@@ -123,7 +121,6 @@ model User {
 
   @@index([email])
   @@index([role])
-  @@index([creatorTier])
 }
 
 model Song {

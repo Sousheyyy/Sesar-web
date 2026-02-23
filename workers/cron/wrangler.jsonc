@@ -1,0 +1,16 @@
+{
+	"name": "sesar-cron",
+	"main": "index.ts",
+	"compatibility_date": "2026-02-18",
+	"compatibility_flags": ["nodejs_compat"],
+	"triggers": {
+		"crons": [
+			"*/5 * * * *",
+			"0 21 * * *"
+		]
+	}
+	// After deploying, set secrets:
+	//   cd workers/cron
+	//   npx wrangler secret put CRON_SECRET
+	//   npx wrangler secret put APP_URL    (e.g. "https://sesarapp.com")
+}

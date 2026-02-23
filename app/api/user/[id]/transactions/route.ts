@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { UserRole } from "@prisma/client";
+import { safeDecryptBankDetails } from "@/server/lib/encryption";
 
 export const dynamic = "force-dynamic";
 
@@ -42,6 +43,7 @@ export async function GET(
     const serialized = transactions.map((t) => ({
       ...t,
       amount: Number(t.amount),
+      bankDetails: safeDecryptBankDetails(t.bankDetails),
       createdAt: t.createdAt.toISOString(),
       approvedAt: t.approvedAt?.toISOString() ?? null,
     }));

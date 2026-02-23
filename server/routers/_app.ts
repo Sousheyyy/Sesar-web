@@ -1,16 +1,48 @@
-import { initTRPC } from "@trpc/server";
+import { initTRPC, TRPCError } from "@trpc/server";
 import superjson from "superjson";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
-import { Context } from "../context";
+import { Context, getSupabaseAdmin } from "../context";
 import { uploadImageFromUrl, STORAGE_BUCKETS } from "@/lib/supabase/storage";
-import { fetchVideoViaInsightIQ } from "@/lib/insightiq";
+import { apifyClient } from "@/lib/apify/client";
+import { checkRateLimit } from "../lib/rateLimiter";
 
 // Minimal tRPC setup for type compatibility
 // This app uses REST API routes, but tRPC types are imported for compatibility
 const t = initTRPC.context<Context>().create({
   transformer: superjson,
+  errorFormatter({ shape, error }) {
+    return {
+      ...shape,
+      data: {
+        ...shape.data,
+        stack: process.env.NODE_ENV === "development" ? error.stack : undefined,
+      },
+    };
+  },
 });
+
+// Rate limiting middleware factory
+function createRateLimitMiddleware(limit: number, keyPrefix: string) {
+  return t.middleware(async ({ ctx, path, next }) => {
+    const key = `${keyPrefix}:${ctx.clientIp}:${path}`;
+    const result = checkRateLimit(key, limit);
+
+    if (!result.allowed) {
+      throw new TRPCError({
+        code: "TOO_MANY_REQUESTS",
+        message: "Çok fazla istek gönderdiniz. Lütfen biraz bekleyin.",
+      });
+    }
+
+    return next();
+  });
+}
+
+// Rate-limited procedure builders
+const strictProcedure = t.procedure.use(createRateLimitMiddleware(10, "strict"));     // Auth & money endpoints
+const normalProcedure = t.procedure.use(createRateLimitMiddleware(60, "normal"));     // Mutations
+const relaxedProcedure = t.procedure.use(createRateLimitMiddleware(120, "relaxed"));  // Read queries
 
 // Migrate a song's cover image from TikTok CDN to Supabase Storage (fire-and-forget)
 function migrateSongCoverIfNeeded(songId: string, coverImage: string | null) {
@@ -36,10 +68,10 @@ function migrateSongCoverIfNeeded(songId: string, coverImage: string | null) {
 }
 
 export const appRouter = t.router({
-  health: t.procedure.query(() => {
+  health: relaxedProcedure.query(() => {
     return "OK from tRPC!";
   }),
-  getUser: t.procedure
+  getUser: relaxedProcedure
     .input(z.object({ userId: z.string() }))
     .query(async ({ input, ctx }) => {
       const callerId = ctx.userId;
@@ -63,7 +95,6 @@ export const appRouter = t.router({
           videoCount: true,
           followingCount: true,
           followerCount: true,
-          creatorTier: true,
           lastStatsFetchedAt: true
         },
       });
@@ -71,7 +102,7 @@ export const appRouter = t.router({
       return user;
     }),
 
-  updateProfile: t.procedure
+  updateProfile: normalProcedure
     .input(z.object({
       tiktokHandle: z.string().optional(),
     }))
@@ -93,7 +124,7 @@ export const appRouter = t.router({
       return updatedUser;
     }),
 
-  createUser: t.procedure
+  createUser: strictProcedure
     .input(z.object({
       userId: z.string(),
       email: z.string().email(),
@@ -141,7 +172,7 @@ export const appRouter = t.router({
       return user;
     }),
 
-  getActiveCampaigns: t.procedure
+  getActiveCampaigns: relaxedProcedure
     .input(z.object({
       search: z.string().optional(),
       limit: z.number().optional().default(100)
@@ -205,7 +236,7 @@ export const appRouter = t.router({
 
       return campaigns;
     }),
-  getJoinedCampaigns: t.procedure
+  getJoinedCampaigns: relaxedProcedure
     .input(z.object({
       cursor: z.string().optional(), // Campaign ID for cursor-based pagination
       limit: z.number().min(1).max(100).default(20),
@@ -298,7 +329,7 @@ export const appRouter = t.router({
       };
     }),
 
-  getCampaignCounts: t.procedure
+  getCampaignCounts: relaxedProcedure
     .query(async ({ ctx }) => {
       const userId = ctx.userId;
       if (!userId) throw new Error("UNAUTHORIZED");
@@ -339,7 +370,7 @@ export const appRouter = t.router({
         joinedActiveCount
       };
     }),
-  getCampaignById: t.procedure
+  getCampaignById: relaxedProcedure
     .input(z.object({ id: z.string() }))
     .query(async ({ input, ctx }) => {
       const userId = ctx.userId;
@@ -500,13 +531,13 @@ export const appRouter = t.router({
       };
     }),
 
-  getCampaignSubmissions: t.procedure
+  getCampaignSubmissions: relaxedProcedure
     .input(z.object({
       campaignId: z.string(),
       cursor: z.string().optional(),
       limit: z.number().min(1).max(100).default(25),
       search: z.string().optional(),
-      sortBy: z.enum(['percentage', 'views', 'likes', 'shares', 'points', 'recent', 'tier']).default('percentage')
+      sortBy: z.enum(['percentage', 'views', 'likes', 'shares', 'points', 'recent']).default('percentage')
     }))
     .query(async ({ input, ctx }) => {
       const { campaignId, cursor, limit, search, sortBy } = input;
@@ -529,7 +560,6 @@ export const appRouter = t.router({
         case 'shares': orderBy = { lastShareCount: 'desc' }; break;
         case 'points': orderBy = { totalPoints: 'desc' }; break;
         case 'recent': orderBy = { createdAt: 'desc' }; break;
-        case 'tier': orderBy = { creator: { creatorTier: 'desc' } }; break; // S > A > B > C > D
       }
 
       const submissions = await prisma.submission.findMany({
@@ -555,7 +585,6 @@ export const appRouter = t.router({
               name: true,
               avatar: true,
               tiktokHandle: true,
-              creatorTier: true // Added for tier display and sorting
             }
           }
         }
@@ -589,7 +618,7 @@ export const appRouter = t.router({
       };
     }),
 
-  getCampaignAnalysis: t.procedure
+  getCampaignAnalysis: relaxedProcedure
     .input(z.object({
       id: z.string(),
       period: z.enum(['24h', '7d', '30d', 'all']).default('all')
@@ -608,11 +637,6 @@ export const appRouter = t.router({
               lastViewCount: true,
               lastLikeCount: true,
               lastShareCount: true,
-              creator: {
-                select: {
-                  creatorTier: true
-                }
-              }
             }
           }
         }
@@ -643,26 +667,6 @@ export const appRouter = t.router({
         shares: acc.shares + (sub.lastShareCount || 0),
         submissions: acc.submissions + 1
       }), { views: 0, likes: 0, shares: 0, submissions: 0 });
-
-      // Calculate Tier Distribution
-      const tierCounts: Record<string, number> = { D: 0, C: 0, B: 0, A: 0, S: 0 };
-      filteredSubmissions.forEach((sub: any) => {
-        const tier = sub.creator?.creatorTier || 'D';
-        tierCounts[tier] = (tierCounts[tier] || 0) + 1;
-      });
-
-      const totalSubmissions = filteredSubmissions.length;
-      const tierDistribution = Object.entries(tierCounts)
-        .map(([tier, count]) => ({
-          tier,
-          count,
-          percentage: totalSubmissions > 0 ? (count / totalSubmissions) * 100 : 0
-        }))
-        .filter(item => item.count > 0) // Only include tiers that have submissions
-        .sort((a, b) => { // Sort S -> A -> B -> C -> D
-          const order: Record<string, number> = { S: 5, A: 4, B: 3, C: 2, D: 1 };
-          return (order[b.tier] || 0) - (order[a.tier] || 0);
-        });
 
       // Calculate Daily Stats (Chart Data) server-side
       const grouped = filteredSubmissions.reduce((acc: any, sub: any) => {
@@ -716,11 +720,10 @@ export const appRouter = t.router({
         campaign,
         totals,
         chartData,
-        tierDistribution
       };
     }),
 
-  getSubmittedCampaign: t.procedure
+  getSubmittedCampaign: relaxedProcedure
     .input(z.object({ id: z.string() }))
     .query(async ({ input, ctx }) => {
       const userId = ctx.userId;
@@ -800,7 +803,7 @@ export const appRouter = t.router({
         }
       };
     }),
-  validateVideo: t.procedure
+  validateVideo: normalProcedure
     .input(z.object({
       campaignId: z.string(),
       tiktokUrl: z.string().url()
@@ -816,23 +819,24 @@ export const appRouter = t.router({
 
       const user = await prisma.user.findUnique({
         where: { id: ctx.userId },
-        select: { tiktokHandle: true, tiktokUserId: true }
+        select: { tiktokHandle: true, tiktokUserId: true, tiktok_open_id: true }
       });
       if (!user) throw new Error("USER_NOT_FOUND");
 
-      if (!user.tiktokUserId) {
+      if (!user.tiktok_open_id) {
         return {
           isValid: false,
-          errors: ["TikTok hesabınız bağlı değil. Lütfen Ayarlar'dan TikTok hesabınızı bağlayın."],
+          errors: ["TikTok hesabınız bağlı değil. Lütfen Profil'den TikTok hesabınızı bağlayın."],
           video: null,
           checks: {}
         };
       }
 
-      // Fetch video data via InsightIQ public content fetch
-      let contentData: any;
+      // Fetch video data via Apify
+      let videoData;
       try {
-        contentData = await fetchVideoViaInsightIQ(input.tiktokUrl);
+        const result = await apifyClient.fetchVideoData(input.tiktokUrl);
+        videoData = result.video;
       } catch (error: any) {
         return {
           isValid: false,
@@ -844,52 +848,54 @@ export const appRouter = t.router({
 
       const errors: string[] = [];
 
-      // 1. Account Check
-      const videoUsername = contentData.profile?.platform_username?.toLowerCase() || contentData.creator?.platform_username?.toLowerCase();
-      const isAccountMatch = !!(user.tiktokHandle && videoUsername && user.tiktokHandle.toLowerCase() === videoUsername);
-      if (!isAccountMatch) {
-        errors.push(`Hesap Uyuşmazlığı: Video @${videoUsername || 'bilinmeyen'} ait, hesabınız @${user.tiktokHandle}`);
+      // 1. Public check
+      const isPublic = !videoData.isPrivate;
+      if (!isPublic) {
+        errors.push("Video herkese açık değil. Lütfen videonuzu herkese açık yapın.");
       }
 
-      // 2. Song Check (title or music ID match)
-      const audioTrack = contentData.audio_track_info || contentData.music;
+      // 2. Account Check
+      const isAccountMatch = !!(
+        user.tiktokHandle &&
+        videoData.authorUniqueId &&
+        user.tiktokHandle.toLowerCase() === videoData.authorUniqueId.toLowerCase()
+      );
+      if (!isAccountMatch) {
+        errors.push(`Hesap Uyuşmazlığı: Video @${videoData.authorUniqueId || 'bilinmeyen'} hesabına ait, sizin hesabınız @${user.tiktokHandle}`);
+      }
+
+      // 3. Song Check (title or music ID match)
       let isSongMatch = false;
-      if (audioTrack) {
-        const trackTitle = (audioTrack.title || audioTrack.name || '').toLowerCase();
+      if (videoData.music) {
+        const trackTitle = (videoData.music.title || '').toLowerCase();
         const campaignSongTitle = (campaign.song.title || '').toLowerCase();
         const titleMatch = trackTitle.includes(campaignSongTitle) || campaignSongTitle.includes(trackTitle);
-        const idMatch = !!(campaign.song.tiktokMusicId && (audioTrack.platform_audio_id || audioTrack.id) === campaign.song.tiktokMusicId);
+        const idMatch = !!(campaign.song.tiktokMusicId && videoData.music.id === campaign.song.tiktokMusicId);
         isSongMatch = !!(titleMatch || idMatch);
       }
       if (!isSongMatch) {
         errors.push(`Müzik Eşleşmedi: Kampanya şarkısı "${campaign.song.title}" videoda bulunamadı.`);
       }
 
-      // 3. Duration Check
-      const videoDuration = contentData.duration || 0;
-      const durationMatch = !campaign.minVideoDuration || videoDuration >= campaign.minVideoDuration;
+      // 4. Duration Check
+      const durationMatch = !campaign.minVideoDuration || videoData.duration >= campaign.minVideoDuration;
       if (!durationMatch) {
-        errors.push(`Süre Yetersiz: Video ${videoDuration}sn (Min: ${campaign.minVideoDuration}sn)`);
+        errors.push(`Süre Yetersiz: Video ${videoData.duration}sn (Min: ${campaign.minVideoDuration}sn)`);
       }
-
-      // 4. Public check (InsightIQ can only fetch public content)
-      const isPublic = true;
-
-      const engagement = contentData.engagement || {};
 
       return {
         isValid: errors.length === 0,
         errors,
         video: {
-          videoId: contentData.platform_content_id || contentData.id,
-          coverImage: contentData.thumbnail_url,
-          soundName: audioTrack?.title || audioTrack?.name || 'Bilinmeyen',
-          creatorUsername: videoUsername || '',
-          duration: videoDuration,
-          views: engagement.view_count || engagement.views || 0,
-          likes: engagement.like_count || engagement.likes || 0,
-          comments: engagement.comment_count || engagement.comments || 0,
-          shares: engagement.share_count || engagement.shares || 0,
+          videoId: videoData.videoId,
+          coverImage: videoData.coverImage,
+          soundName: videoData.music?.title || 'Bilinmeyen',
+          creatorUsername: videoData.authorUniqueId,
+          duration: videoData.duration,
+          views: videoData.stats.playCount,
+          likes: videoData.stats.diggCount,
+          comments: videoData.stats.commentCount,
+          shares: videoData.stats.shareCount,
         },
         checks: {
           accountMatch: isAccountMatch,
@@ -900,7 +906,7 @@ export const appRouter = t.router({
       };
     }),
 
-  submitVideo: t.procedure
+  submitVideo: normalProcedure
     .input(z.object({
       campaignId: z.string(),
       tiktokUrl: z.string().url()
@@ -914,7 +920,7 @@ export const appRouter = t.router({
 
       const user = await prisma.user.findUnique({
         where: { id: userId },
-        select: { plan: true, cycleStartDate: true, creatorTier: true }
+        select: { plan: true, cycleStartDate: true }
       });
 
       if (!user) throw new Error("USER_NOT_FOUND");
@@ -985,41 +991,39 @@ export const appRouter = t.router({
         throw new Error("CAMPAIGN_LOCKED"); // Locked for final distribution
       }
 
-      // 1. Get user's InsightIQ account for video verification
+      // 1. Verify user has TikTok connected
       const fullUser = await prisma.user.findUnique({
         where: { id: userId },
-        select: { tiktokUserId: true, tiktokHandle: true }
+        select: { tiktok_open_id: true, tiktokHandle: true }
       });
-      if (!fullUser?.tiktokUserId) {
+      if (!fullUser?.tiktok_open_id) {
         throw new Error("TIKTOK_NOT_LINKED");
       }
 
-      // 2. Verify video via InsightIQ async content fetch
-      let contentData: any;
+      // 2. Verify video via Apify
+      let videoData;
       try {
-        contentData = await fetchVideoViaInsightIQ(input.tiktokUrl);
+        const result = await apifyClient.fetchVideoData(input.tiktokUrl);
+        videoData = result.video;
       } catch (error: any) {
-        throw new Error(`INVALID_VIDEO: ${error.message}`);
+        throw new Error("INVALID_VIDEO");
       }
-
-      const engagement = contentData.engagement || {};
 
       // 3. Calculate initial points
       const { CalculationService } = await import('@/server/services/calculationService');
-      const views = engagement.view_count || engagement.views || 0;
-      const likes = engagement.like_count || engagement.likes || 0;
-      const shares = engagement.share_count || engagement.shares || 0;
-      const comments = engagement.comment_count || engagement.comments || 0;
+      const views = videoData.stats.playCount;
+      const likes = videoData.stats.diggCount;
+      const shares = videoData.stats.shareCount;
+      const comments = videoData.stats.commentCount;
       const points = CalculationService.calculatePoints(views, likes, shares);
 
-      // 4. Create Submission with points and insightiqContentId
+      // 4. Create Submission
       const submission = await prisma.submission.create({
         data: {
           campaignId: input.campaignId,
           creatorId: userId,
           tiktokUrl: input.tiktokUrl,
-          tiktokVideoId: contentData.platform_content_id || contentData.id || '',
-          insightiqContentId: contentData.id || null, // InsightIQ internal UUID for webhook matching
+          tiktokVideoId: videoData.videoId,
           status: "APPROVED",
           lastViewCount: views,
           lastLikeCount: likes,
@@ -1029,9 +1033,8 @@ export const appRouter = t.router({
           likePoints: points.likePoints,
           sharePoints: points.sharePoints,
           totalPoints: points.totalPoints,
-          videoDuration: contentData.duration || 0,
+          videoDuration: videoData.duration || 0,
           lastCheckedAt: new Date(),
-          // sharePercent and estimatedEarnings stay 0 — updated at batch time
         },
       });
 
@@ -1041,7 +1044,7 @@ export const appRouter = t.router({
       return { success: true, submissionId: submission.id };
     }),
 
-  deleteSubmission: t.procedure
+  deleteSubmission: normalProcedure
     .input(z.object({
       submissionId: z.string()
     }))
@@ -1083,7 +1086,7 @@ export const appRouter = t.router({
       return { success: true };
     }),
 
-  createCampaign: t.procedure
+  createCampaign: normalProcedure
     .input(z.object({
       tiktokUrl: z.string().url(),
       title: z.string().min(1),
@@ -1133,7 +1136,7 @@ export const appRouter = t.router({
         try {
           songMetadata = await apifyClient.fetchMusicMetadata(input.tiktokUrl);
         } catch (error: any) {
-          throw new Error(`INVALID_SONG_URL: ${error.message}`);
+          throw new Error("INVALID_SONG_URL");
         }
       }
 
@@ -1235,7 +1238,7 @@ export const appRouter = t.router({
       return { success: true, campaignId: campaign.id };
     }),
 
-  fetchSongPreview: t.procedure
+  fetchSongPreview: normalProcedure
     .input(z.object({
       tiktokUrl: z.string().url(),
     }))
@@ -1279,7 +1282,7 @@ export const appRouter = t.router({
       };
     }),
 
-  getMyCampaigns: t.procedure
+  getMyCampaigns: relaxedProcedure
     .input(z.object({
       cursor: z.string().optional(), // Campaign ID for cursor-based pagination
       limit: z.number().min(1).max(100).default(20),
@@ -1357,16 +1360,15 @@ export const appRouter = t.router({
       };
     }),
 
-  getCreatorStats: t.procedure
+  getCreatorStats: relaxedProcedure
     .query(async ({ ctx }) => {
       const userId = ctx.userId;
       if (!userId) throw new Error("UNAUTHORIZED");
 
-      // Fetch user info for tier, follower count, and plan
+      // Fetch user info for follower count and plan
       const user = await prisma.user.findUnique({
         where: { id: userId },
         select: {
-          creatorTier: true,
           followerCount: true,
           plan: true
         }
@@ -1479,13 +1481,12 @@ export const appRouter = t.router({
         recentActivity,
         recentSubmissions: activeSubmissions.slice(0, 10),
         // User info
-        creatorTier: user?.creatorTier,
         followerCount: user?.followerCount || 0,
         plan: user?.plan || 'FREE'
       };
     }),
 
-  getArtistStats: t.procedure
+  getArtistStats: relaxedProcedure
     .query(async ({ ctx }) => {
       const userId = ctx.userId;
       if (!userId) throw new Error("UNAUTHORIZED");
@@ -1574,7 +1575,7 @@ export const appRouter = t.router({
       };
     }),
 
-  getActivity: t.procedure
+  getActivity: relaxedProcedure
     .query(async ({ ctx }) => {
       const userId = ctx.userId;
       if (!userId) throw new Error("UNAUTHORIZED");
@@ -1617,7 +1618,7 @@ export const appRouter = t.router({
       }
     }),
 
-  upgradeToPro: t.procedure
+  upgradeToPro: strictProcedure
     .mutation(async ({ ctx }) => {
       const userId = ctx.userId;
       if (!userId) throw new Error("UNAUTHORIZED");
@@ -1629,7 +1630,7 @@ export const appRouter = t.router({
       return { success: true, user: updatedUser };
     }),
 
-  upgradeToProWithBalance: t.procedure
+  upgradeToProWithBalance: strictProcedure
     .mutation(async ({ ctx }) => {
       const userId = ctx.userId;
       if (!userId) throw new Error("UNAUTHORIZED");
@@ -1671,7 +1672,7 @@ export const appRouter = t.router({
       return { success: true, user: updatedUser };
     }),
 
-  rejectCampaign: t.procedure
+  rejectCampaign: normalProcedure
     .input(z.object({
       campaignId: z.string(),
       reason: z.string().min(1, "Rejection reason is required"),
@@ -1722,7 +1723,7 @@ export const appRouter = t.router({
     }),
 
   // ─── Campaign Approval ───────────────────────────────────────────────
-  approveCampaign: t.procedure
+  approveCampaign: normalProcedure
     .input(z.object({ campaignId: z.string() }))
     .mutation(async ({ input, ctx }) => {
       const userId = ctx.userId;
@@ -1762,7 +1763,7 @@ export const appRouter = t.router({
     }),
 
   // ─── Edit Pending Campaign (Artist) ──────────────────────────────────
-  editPendingCampaign: t.procedure
+  editPendingCampaign: normalProcedure
     .input(z.object({
       campaignId: z.string(),
       title: z.string().min(1).max(100).optional(),
@@ -1808,7 +1809,7 @@ export const appRouter = t.router({
     }),
 
   // ─── Cancel Campaign (Artist) ────────────────────────────────────────
-  cancelCampaign: t.procedure
+  cancelCampaign: normalProcedure
     .input(z.object({ campaignId: z.string() }))
     .mutation(async ({ input, ctx }) => {
       const userId = ctx.userId;
@@ -1850,284 +1851,146 @@ export const appRouter = t.router({
       return { success: true, refundAmount: refundAmountTL };
     }),
 
-  // ─── InsightIQ (Phyllo) Integration ───────────────────────────────────
+  // ─── TikTok OAuth Integration ───────────────────────────────────────
 
-  // Create InsightIQ SDK token for authenticated users
-  createInsightIQToken: t.procedure
-    .input(z.object({
-      redirectUrl: z.string().optional(),
-    }).optional())
-    .mutation(async ({ ctx, input }) => {
+  // Returns TikTok OAuth URL for connecting a TikTok account
+  getTikTokAuthUrl: strictProcedure.mutation(async ({ ctx }) => {
     const userId = ctx.userId;
     if (!userId) throw new Error("UNAUTHORIZED");
 
-    const INSIGHTIQ_BASE_URL = process.env.INSIGHTIQ_BASE_URL || "https://api.staging.insightiq.ai";
-    const clientId = process.env.INSIGHTIQ_CLIENT_ID;
-    const clientSecret = process.env.INSIGHTIQ_CLIENT_SECRET;
+    const crypto = await import("crypto");
 
-    if (!clientId || !clientSecret) {
-      throw new Error("Missing InsightIQ credentials");
+    const clientKey = process.env.TIKTOK_CLIENT_KEY;
+    const clientSecret = process.env.TIKTOK_CLIENT_SECRET;
+    const redirectUri = process.env.TIKTOK_REDIRECT_URI;
+
+    if (!clientKey || !clientSecret || !redirectUri) {
+      throw new Error("TikTok OAuth yapılandırması eksik");
     }
 
-    const authHeader = `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`;
-
-    // Helper function to create SDK token
-    const createSdkToken = async (insightiqUserId: string) => {
-      const body: Record<string, any> = {
-        user_id: insightiqUserId,
-        products: ["IDENTITY", "IDENTITY.AUDIENCE", "ENGAGEMENT", "ENGAGEMENT.AUDIENCE", "INCOME"],
-      };
-
-      // Add redirect URL if provided (for web SDK flow)
-      if (input?.redirectUrl) {
-        body.redirect_url = input.redirectUrl;
-      }
-
-      const tokenRes = await fetch(`${INSIGHTIQ_BASE_URL}/v1/sdk-tokens`, {
-        method: "POST",
-        headers: {
-          Authorization: authHeader,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(body),
-      });
-      if (!tokenRes.ok) {
-        const errText = await tokenRes.text();
-        console.error("InsightIQ token creation failed:", errText);
-        throw new Error("Failed to create InsightIQ token");
-      }
-      const tokenData = await tokenRes.json();
-      console.log("InsightIQ SDK token response:", JSON.stringify(tokenData));
-
-      // Return token and connect_url if provided by InsightIQ
-      return {
-        token: tokenData.sdk_token as string,
-        connectUrl: tokenData.redirect_url || tokenData.connect_url || null,
-        userId: insightiqUserId,
-      };
+    // Build signed state token (HMAC-SHA256)
+    const statePayload = {
+      userId,
+      nonce: crypto.randomUUID(),
+      exp: Math.floor(Date.now() / 1000) + 600, // 10 min expiry
     };
+    const json = JSON.stringify(statePayload);
+    const data = Buffer.from(json).toString("base64url");
+    const hmac = crypto.createHmac("sha256", clientSecret).update(data).digest("base64url");
+    const state = `${data}.${hmac}`;
 
-    // Step 1: Try to get existing user first (handles reconnect case)
-    const existingUserRes = await fetch(`${INSIGHTIQ_BASE_URL}/v1/users/external_id/${userId}`, {
-      headers: { Authorization: authHeader },
-    });
+    const scope = "user.info.basic,user.info.profile,user.info.stats";
+    const authUrl =
+      `https://www.tiktok.com/v2/auth/authorize/` +
+      `?client_key=${clientKey}` +
+      `&response_type=code` +
+      `&scope=${scope}` +
+      `&redirect_uri=${encodeURIComponent(redirectUri)}` +
+      `&state=${encodeURIComponent(state)}`;
 
-    if (existingUserRes.ok) {
-      const existingUser = await existingUserRes.json();
-      console.log("InsightIQ user exists, creating token for:", existingUser.id);
-      return createSdkToken(existingUser.id);
-    }
-
-    // Step 2: User doesn't exist, create new one
-    console.log("InsightIQ user not found, creating new user...");
-    const createRes = await fetch(`${INSIGHTIQ_BASE_URL}/v1/users`, {
-      method: "POST",
-      headers: {
-        Authorization: authHeader,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ external_id: userId, name: userId }),
-    });
-
-    if (!createRes.ok) {
-      const errorText = await createRes.text();
-      console.error("InsightIQ user creation failed:", createRes.status, errorText);
-
-      // Handle race condition: user was created between our check and create
-      if (errorText.includes("user_exists_with_external_id") || createRes.status === 409) {
-        console.log("InsightIQ user was created concurrently, fetching...");
-        const retryRes = await fetch(`${INSIGHTIQ_BASE_URL}/v1/users/external_id/${userId}`, {
-          headers: { Authorization: authHeader },
-        });
-        if (retryRes.ok) {
-          const user = await retryRes.json();
-          return createSdkToken(user.id);
-        }
-      }
-
-      throw new Error(`InsightIQ API error (${createRes.status}): ${errorText.substring(0, 200)}`);
-    }
-
-    const created = await createRes.json();
-    const insightiqUserId = created.id;
-    console.log("InsightIQ user created:", insightiqUserId);
-
-    return createSdkToken(insightiqUserId);
+    return { authUrl };
   }),
 
-  // Link InsightIQ account after successful connect flow
-  linkInsightIQAccount: t.procedure
-    .input(z.object({
-      accountId: z.string(),
-    }))
-    .mutation(async ({ ctx, input }) => {
-      const userId = ctx.userId;
-      if (!userId) throw new Error("UNAUTHORIZED");
-
-      const INSIGHTIQ_BASE_URL = process.env.INSIGHTIQ_BASE_URL || "https://api.staging.insightiq.ai";
-      const clientId = process.env.INSIGHTIQ_CLIENT_ID;
-      const clientSecret = process.env.INSIGHTIQ_CLIENT_SECRET;
-
-      if (!clientId || !clientSecret) {
-        throw new Error("Missing InsightIQ credentials");
-      }
-
-      const authHeader = `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`;
-
-      // Fetch account from InsightIQ with retries (profile data may not be
-      // available immediately after connect — InsightIQ fetches it async)
-      const MAX_AVATAR_RETRIES = 3;
-      const RETRY_DELAY_MS = 2000;
-      let account: any;
-      let avatar: string | null = null;
-
-      for (let attempt = 0; attempt <= MAX_AVATAR_RETRIES; attempt++) {
-        const accountRes = await fetch(`${INSIGHTIQ_BASE_URL}/v1/accounts/${input.accountId}`, {
-          headers: {
-            Authorization: authHeader,
-            "Content-Type": "application/json",
-          },
-        });
-
-        if (!accountRes.ok) {
-          console.error("InsightIQ account fetch failed:", await accountRes.text());
-          throw new Error("Failed to fetch InsightIQ account");
-        }
-
-        account = await accountRes.json();
-        console.log(`InsightIQ account data (attempt ${attempt + 1}):`, JSON.stringify(account, null, 2));
-
-        avatar = account.platform_profile_picture_url || account.profile_pic_url || account.image_url || null;
-        if (avatar) break;
-
-        if (attempt < MAX_AVATAR_RETRIES) {
-          console.log(`[linkInsightIQ] Avatar not available yet, retrying in ${RETRY_DELAY_MS}ms... (attempt ${attempt + 1}/${MAX_AVATAR_RETRIES})`);
-          await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS));
-        }
-      }
-
-      // Fallback: try the social profiles endpoint if avatar still missing
-      if (!avatar) {
-        try {
-          console.log("[linkInsightIQ] Trying profiles API fallback for avatar...");
-          const profileRes = await fetch(
-            `${INSIGHTIQ_BASE_URL}/v1/social/creators/profiles?account_id=${input.accountId}`,
-            { headers: { Authorization: authHeader, "Content-Type": "application/json" } }
-          );
-          if (profileRes.ok) {
-            const profileData = await profileRes.json();
-            const profiles = profileData.data || [];
-            if (profiles.length > 0) {
-              avatar = profiles[0].platform_profile_picture_url || profiles[0].image_url || null;
-              console.log("[linkInsightIQ] Got avatar from profiles fallback:", avatar);
-            }
-          }
-        } catch (e) {
-          console.warn("[linkInsightIQ] Profiles fallback failed:", e);
-        }
-      }
-
-      // InsightIQ uses different field names - check all possibilities
-      const handle: string | undefined = account.platform_username || account.username;
-
-      if (!handle) {
-        console.error("InsightIQ account missing platform_username:", account);
-        throw new Error("Could not resolve TikTok handle from InsightIQ");
-      }
-
-      // Get additional profile data - InsightIQ field names
-      const displayName: string = account.platform_profile_name || account.name || handle;
-      console.log("Extracted: handle=", handle, "displayName=", displayName, "avatar=", avatar);
-
-      // Update user with TikTok data (using existing schema fields)
-      await prisma.user.update({
-        where: { id: userId },
-        data: {
-          tiktokHandle: handle,
-          tiktokUserId: input.accountId, // Store InsightIQ account ID here
-          tiktokUsername: handle,
-          tiktokDisplayName: displayName,
-          tiktokAvatarUrl: avatar,
-          tiktokConnectedAt: new Date(),
-          name: `@${handle}`, // Set display name to TikTok handle
-          avatar: avatar,
-        },
-      });
-
-      return { tiktokHandle: handle, displayName, avatar };
-    }),
-
-  // Disconnect InsightIQ account
-  disconnectInsightIQAccount: t.procedure.mutation(async ({ ctx }) => {
-    console.log("[DisconnectInsightIQ] Starting disconnect mutation...");
+  // Disconnect TikTok account (clear all TikTok data)
+  disconnectTikTok: normalProcedure.mutation(async ({ ctx }) => {
     const userId = ctx.userId;
-    console.log("[DisconnectInsightIQ] User ID:", userId);
+    if (!userId) throw new Error("UNAUTHORIZED");
 
-    if (!userId) {
-      console.error("[DisconnectInsightIQ] UNAUTHORIZED - no user ID");
-      throw new Error("UNAUTHORIZED");
-    }
-
-    const currentUser = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { tiktokUserId: true, tiktokHandle: true },
-    });
-    console.log("[DisconnectInsightIQ] Current user TikTok data:", currentUser);
-
-    // Best-effort revoke on InsightIQ's side
-    if (currentUser?.tiktokUserId) {
-      try {
-        const INSIGHTIQ_BASE_URL = process.env.INSIGHTIQ_BASE_URL || "https://api.staging.insightiq.ai";
-        const clientId = process.env.INSIGHTIQ_CLIENT_ID;
-        const clientSecret = process.env.INSIGHTIQ_CLIENT_SECRET;
-
-        if (clientId && clientSecret) {
-          const authHeader = `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`;
-          console.log("[DisconnectInsightIQ] Attempting to revoke account on InsightIQ:", currentUser.tiktokUserId);
-          const revokeRes = await fetch(`${INSIGHTIQ_BASE_URL}/v1/accounts/${currentUser.tiktokUserId}`, {
-            method: "DELETE",
-            headers: { Authorization: authHeader },
-          });
-          console.log("[DisconnectInsightIQ] InsightIQ revoke response:", revokeRes.status);
-        }
-      } catch (e) {
-        console.warn("[DisconnectInsightIQ] InsightIQ account revoke failed — continuing with local disconnect:", e);
-      }
-    } else {
-      console.log("[DisconnectInsightIQ] No tiktokUserId found, skipping InsightIQ revoke");
-    }
-
-    // Clear TikTok data from user (use 0 for non-nullable Int fields)
-    console.log("[DisconnectInsightIQ] Clearing TikTok data from database...");
     await prisma.user.update({
       where: { id: userId },
       data: {
-        // TikTok profile data
+        tiktok_open_id: null,
+        tiktok_access_token: null,
+        tiktok_refresh_token: null,
+        tiktok_token_expires_at: null,
+        tiktok_scopes: null,
         tiktokHandle: null,
         tiktokUserId: null,
         tiktokUsername: null,
         tiktokDisplayName: null,
         tiktokAvatarUrl: null,
         tiktokConnectedAt: null,
-        // InsightIQ tokens
         insightiqAccessToken: null,
         insightiqRefreshToken: null,
         insightiqTokenExpiry: null,
-        // Stats
+        insightiqSessionExpired: false,
         followerCount: 0,
         followingCount: 0,
         totalLikes: 0,
         videoCount: 0,
-        creatorTier: null,
         lastStatsFetchedAt: null,
-        // Reset profile if it was set from TikTok
         avatar: null,
       },
     });
-    console.log("[DisconnectInsightIQ] Database updated successfully!");
 
     return { success: true };
   }),
+
+  // ─── Account Deletion (GDPR) ────────────────────────────────────────
+  deleteMyAccount: strictProcedure
+    .input(z.object({ confirmEmail: z.string().email() }))
+    .mutation(async ({ input, ctx }) => {
+      const userId = ctx.userId;
+      if (!userId) throw new TRPCError({ code: "UNAUTHORIZED" });
+
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: {
+          email: true,
+          _count: {
+            select: {
+              campaigns: { where: { status: "ACTIVE" } },
+            },
+          },
+        },
+      });
+
+      if (!user) throw new TRPCError({ code: "NOT_FOUND", message: "Kullanıcı bulunamadı" });
+
+      // Email confirmation must match
+      if (user.email.toLowerCase() !== input.confirmEmail.toLowerCase()) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "E-posta adresi eşleşmiyor" });
+      }
+
+      // Block if user has active campaigns
+      if (user._count.campaigns > 0) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "Aktif kampanyalarınız varken hesabınızı silemezsiniz. Önce kampanyalarınızı sonlandırın.",
+        });
+      }
+
+      // Block if user has pending withdrawals
+      const pendingWithdrawals = await prisma.transaction.count({
+        where: { userId, type: "WITHDRAWAL", status: "PENDING" },
+      });
+      if (pendingWithdrawals > 0) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "Bekleyen para çekim işlemleriniz varken hesabınızı silemezsiniz.",
+        });
+      }
+
+      // Cascade delete in transaction (same order as admin user deletion)
+      await prisma.$transaction([
+        prisma.submission.deleteMany({ where: { creatorId: userId } }),
+        prisma.transaction.deleteMany({ where: { userId } }),
+        prisma.notification.deleteMany({ where: { userId } }),
+        prisma.campaign.deleteMany({ where: { artistId: userId } }),
+        prisma.song.deleteMany({ where: { artistId: userId } }),
+        prisma.user.delete({ where: { id: userId } }),
+      ]);
+
+      // Delete Supabase auth user (best-effort — DB records already gone)
+      try {
+        const supabaseAdmin = getSupabaseAdmin();
+        await supabaseAdmin.auth.admin.deleteUser(userId);
+      } catch {
+        // Supabase deletion failed but DB is clean — acceptable
+      }
+
+      return { success: true };
+    }),
 });
 
 export type AppRouter = typeof appRouter;

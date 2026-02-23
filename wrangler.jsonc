@@ -29,4 +29,6 @@
 			"id": "be55c53084db42178e15252ffe284538"
 		}
 	]
+	// Cron triggers are handled by the separate sesar-cron worker
+	// See workers/cron/ for setup instructions
 }

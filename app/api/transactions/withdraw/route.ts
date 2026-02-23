@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { UserRole } from "@prisma/client";
+import { encryptBankDetails } from "@/server/lib/encryption";
 
 // Force dynamic rendering for Cloudflare Pages
 export const dynamic = 'force-dynamic';
@@ -49,7 +50,7 @@ export async function POST(req: NextRequest) {
         amount,
         status: "PENDING",
         description: "Withdrawal request to bank account",
-        bankDetails: JSON.stringify(bankDetails),
+        bankDetails: encryptBankDetails(JSON.stringify(bankDetails)),
       },
     });
 

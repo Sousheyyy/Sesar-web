@@ -7,7 +7,7 @@ import { auth } from "@/lib/auth";
 // Singleton Supabase admin client for Bearer token verification
 let supabaseAdmin: ReturnType<typeof createSupabaseClient> | null = null;
 
-function getSupabaseAdmin() {
+export function getSupabaseAdmin() {
     if (!supabaseAdmin) {
         supabaseAdmin = createSupabaseClient(
             process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -55,11 +55,15 @@ async function verifyBearerToken(token: string): Promise<string | null> {
 // Context: ONLY handles authentication (token verification).
 // Returns { userId } — no Prisma lookup. Each procedure fetches its own data.
 export const createContext = async (opts: FetchCreateContextFnOptions) => {
+    // Extract client IP for rate limiting
+    const forwarded = opts.req.headers.get("x-forwarded-for");
+    const clientIp = forwarded ? forwarded.split(",")[0].trim() : "unknown";
+
     // 1. Try cookie-based auth (web sessions via NextAuth)
     try {
         const session = await auth();
         if (session?.user?.id) {
-            return { userId: session.user.id };
+            return { userId: session.user.id, clientIp };
         }
     } catch {
         // Cookie auth failed — fall through to Bearer token
@@ -72,12 +76,12 @@ export const createContext = async (opts: FetchCreateContextFnOptions) => {
         if (token) {
             const userId = await verifyBearerToken(token);
             if (userId) {
-                return { userId };
+                return { userId, clientIp };
             }
         }
     }
 
-    return { userId: null };
+    return { userId: null, clientIp };
 };
 
 export type Context = inferAsyncReturnType<typeof createContext>;

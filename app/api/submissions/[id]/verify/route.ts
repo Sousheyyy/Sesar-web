@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { fetchVideoViaInsightIQ } from "@/lib/insightiq";
+import { apifyClient } from "@/lib/apify/client";
 import { UserRole } from "@prisma/client";
 import { updateEstimatedPayouts } from "@/lib/payout";
 
@@ -55,33 +55,46 @@ export async function POST(
       );
     }
 
-    // Fetch video metadata via InsightIQ
-    let contentData: any;
+    // Fetch video metadata via Apify
+    let videoData;
     try {
-      contentData = await fetchVideoViaInsightIQ(submission.tiktokUrl);
+      const result = await apifyClient.fetchVideoData(submission.tiktokUrl);
+      videoData = result.video;
     } catch (fetchError: any) {
-      // Handle specific errors
-      if (fetchError.message?.includes("rate limit")) {
+      if (fetchError.message?.includes("rate limit") || fetchError.message?.includes("429")) {
         return NextResponse.json(
           { error: "Rate limit exceeded. Please try again later." },
           { status: 429 }
         );
       }
-      if (fetchError.message?.includes("private") || fetchError.message?.includes("not found") || fetchError.message?.includes("herkese açık")) {
-        await prisma.submission.update({
-          where: { id },
-          data: {
-            status: "REJECTED",
-            rejectionReason: "Video özel, silinmiş veya erişilebilir değil",
-            verified: false,
-          },
-        });
-        return NextResponse.json({
-          success: false,
-          message: "Video reddedildi: Erişilebilir değil",
-        });
-      }
-      throw fetchError;
+      await prisma.submission.update({
+        where: { id },
+        data: {
+          status: "REJECTED",
+          rejectionReason: "Video özel, silinmiş veya erişilebilir değil",
+          verified: false,
+        },
+      });
+      return NextResponse.json({
+        success: false,
+        message: "Video reddedildi: Erişilebilir değil",
+      });
+    }
+
+    // Check: Video is public
+    if (videoData.isPrivate) {
+      await prisma.submission.update({
+        where: { id },
+        data: {
+          status: "REJECTED",
+          rejectionReason: "Video herkese açık değil",
+          verified: false,
+        },
+      });
+      return NextResponse.json({
+        success: false,
+        message: "Video reddedildi: Video herkese açık değil",
+      });
     }
 
     // VERIFICATION: Verify video ownership
@@ -94,7 +107,6 @@ export async function POST(
           verified: false,
         },
       });
-
       return NextResponse.json({
         success: false,
         message: "Video reddedildi: İçerik üreticisi TikTok profilini bağlamamış",
@@ -106,9 +118,7 @@ export async function POST(
     };
 
     const creatorHandle = normalizeUsername(submission.creator.tiktokHandle);
-    const videoUsername = contentData.profile?.platform_username?.toLowerCase() || contentData.creator?.platform_username?.toLowerCase() || "";
-
-    if (!videoUsername || normalizeUsername(videoUsername) !== creatorHandle) {
+    if (!videoData.authorUniqueId || normalizeUsername(videoData.authorUniqueId) !== creatorHandle) {
       await prisma.submission.update({
         where: { id },
         data: {
@@ -117,7 +127,6 @@ export async function POST(
           verified: false,
         },
       });
-
       return NextResponse.json({
         success: false,
         message: "Video reddedildi: Video içerik üreticisinin TikTok hesabına ait değil",
@@ -125,13 +134,12 @@ export async function POST(
     }
 
     // Verify song match (title or music ID match)
-    const audioTrack = contentData.audio_track_info || contentData.music;
     let isSongMatch = false;
-    if (audioTrack) {
-      const trackTitle = (audioTrack.title || audioTrack.name || '').toLowerCase();
+    if (videoData.music) {
+      const trackTitle = (videoData.music.title || '').toLowerCase();
       const campaignSongTitle = (submission.campaign.song.title || '').toLowerCase();
       const titleMatch = trackTitle.includes(campaignSongTitle) || campaignSongTitle.includes(trackTitle);
-      const idMatch = !!(submission.campaign.song.tiktokMusicId && (audioTrack.platform_audio_id || audioTrack.id) === submission.campaign.song.tiktokMusicId);
+      const idMatch = !!(submission.campaign.song.tiktokMusicId && videoData.music.id === submission.campaign.song.tiktokMusicId);
       isSongMatch = !!(titleMatch || idMatch);
     }
 
@@ -144,7 +152,6 @@ export async function POST(
           verified: false,
         },
       });
-
       return NextResponse.json({
         success: false,
         message: `Video reddedildi: Kampanya şarkısı "${submission.campaign.song.title}" videoda bulunamadı.`,
@@ -152,20 +159,18 @@ export async function POST(
     }
 
     // Check duration requirement
-    const videoDuration = contentData.duration || 0;
     if (
       submission.campaign.minVideoDuration &&
-      videoDuration < submission.campaign.minVideoDuration
+      videoData.duration < submission.campaign.minVideoDuration
     ) {
       await prisma.submission.update({
         where: { id },
         data: {
           status: "REJECTED",
-          rejectionReason: `Video süresi (${videoDuration}sn) gereken süreden (${submission.campaign.minVideoDuration}sn) kısa`,
+          rejectionReason: `Video süresi (${videoData.duration}sn) gereken süreden (${submission.campaign.minVideoDuration}sn) kısa`,
           verified: false,
         },
       });
-
       return NextResponse.json({
         success: false,
         message: "Video reddedildi: Süre çok kısa",
@@ -173,18 +178,15 @@ export async function POST(
     }
 
     // All checks passed - update submission with video data and approve
-    const engagement = contentData.engagement || {};
-
     await prisma.submission.update({
       where: { id },
       data: {
-        tiktokVideoId: contentData.platform_content_id || contentData.id,
-        insightiqContentId: contentData.id,
-        lastViewCount: engagement.view_count || 0,
-        lastLikeCount: engagement.like_count || 0,
-        lastCommentCount: engagement.comment_count || 0,
-        lastShareCount: engagement.share_count || 0,
-        videoDuration: videoDuration || null,
+        tiktokVideoId: videoData.videoId,
+        lastViewCount: videoData.stats.playCount,
+        lastLikeCount: videoData.stats.diggCount,
+        lastCommentCount: videoData.stats.commentCount,
+        lastShareCount: videoData.stats.shareCount,
+        videoDuration: videoData.duration || null,
         verified: true,
         verifiedAt: new Date(),
         lastCheckedAt: new Date(),

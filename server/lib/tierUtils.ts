@@ -1,4 +1,4 @@
-// Campaign budget utilities (no tiers - budget brackets determine commission & estimates)
+// Campaign budget utilities (budget brackets determine commission & estimates)
 
 // Minimum NET budget after commission deduction (the amount distributed to creators)
 export const MIN_NET_BUDGET_TL = 20000;

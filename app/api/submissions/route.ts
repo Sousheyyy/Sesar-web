@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { fetchVideoViaInsightIQ } from "@/lib/insightiq";
+import { apifyClient } from "@/lib/apify/client";
 import { updateEstimatedPayouts } from "@/lib/payout";
 import { logApiCallSimple, extractEndpoint } from "@/lib/api-logger-simple";
 
@@ -50,7 +50,7 @@ export async function POST(req: NextRequest) {
     // VERIFICATION STEP 1: Check if user has connected TikTok profile
     const user = await prisma.user.findUnique({
       where: { id: session.user.id },
-      select: { id: true, tiktokHandle: true, creatorTier: true, plan: true },
+      select: { id: true, tiktokHandle: true, plan: true },
     });
 
     if (!user) {
@@ -166,34 +166,38 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // Attempt automatic verification via InsightIQ
+    // Attempt automatic verification via Apify
     let autoVerificationSuccess = false;
     let rejectionReason = "";
 
     try {
-      const contentData = await fetchVideoViaInsightIQ(tiktokUrl);
+      const { video: videoData } = await apifyClient.fetchVideoData(tiktokUrl);
+
+      // Check: Video is public
+      if (videoData.isPrivate) {
+        rejectionReason = "Video herkese açık değil. Lütfen videonuzu herkese açık yapın.";
+      }
 
       // VERIFICATION STEP 2: Verify video ownership
-      const normalizeUsername = (username: string) => {
-        return username.replace(/^@/, "").toLowerCase().trim();
-      };
+      if (!rejectionReason) {
+        const normalizeUsername = (username: string) => {
+          return username.replace(/^@/, "").toLowerCase().trim();
+        };
 
-      const userHandle = normalizeUsername(user.tiktokHandle);
-      const videoUsername = contentData.profile?.platform_username?.toLowerCase() || contentData.creator?.platform_username?.toLowerCase() || "";
-
-      if (!videoUsername || normalizeUsername(videoUsername) !== userHandle) {
-        rejectionReason = `Bu video bağlı TikTok hesabınıza (@${user.tiktokHandle}) ait değil. Lütfen kendi hesabınızdan bir video gönderin.`;
+        const userHandle = normalizeUsername(user.tiktokHandle!);
+        if (!videoData.authorUniqueId || normalizeUsername(videoData.authorUniqueId) !== userHandle) {
+          rejectionReason = `Bu video bağlı TikTok hesabınıza (@${user.tiktokHandle}) ait değil. Lütfen kendi hesabınızdan bir video gönderin.`;
+        }
       }
 
       // VERIFICATION STEP 3: Check if song matches
       if (!rejectionReason) {
-        const audioTrack = contentData.audio_track_info || contentData.music;
         let isSongMatch = false;
-        if (audioTrack) {
-          const trackTitle = (audioTrack.title || audioTrack.name || '').toLowerCase();
+        if (videoData.music) {
+          const trackTitle = (videoData.music.title || '').toLowerCase();
           const campaignSongTitle = (campaign.song.title || '').toLowerCase();
           const titleMatch = trackTitle.includes(campaignSongTitle) || campaignSongTitle.includes(trackTitle);
-          const idMatch = !!(campaign.song.tiktokMusicId && (audioTrack.platform_audio_id || audioTrack.id) === campaign.song.tiktokMusicId);
+          const idMatch = !!(campaign.song.tiktokMusicId && videoData.music.id === campaign.song.tiktokMusicId);
           isSongMatch = !!(titleMatch || idMatch);
         }
         if (!isSongMatch) {
@@ -203,26 +207,22 @@ export async function POST(req: NextRequest) {
 
       // VERIFICATION STEP 4: Check duration requirement
       if (!rejectionReason && campaign.minVideoDuration) {
-        const videoDuration = contentData.duration || 0;
-        if (videoDuration < campaign.minVideoDuration) {
-          rejectionReason = `Video süresi (${videoDuration}sn) gereken süreden (${campaign.minVideoDuration}sn) kısa`;
+        if (videoData.duration < campaign.minVideoDuration) {
+          rejectionReason = `Video süresi (${videoData.duration}sn) gereken süreden (${campaign.minVideoDuration}sn) kısa`;
         }
       }
 
       // All checks passed
       if (!rejectionReason) {
-        const engagement = contentData.engagement || {};
-
         await prisma.submission.update({
           where: { id: submission.id },
           data: {
-            tiktokVideoId: contentData.platform_content_id || contentData.id,
-            insightiqContentId: contentData.id,
-            lastViewCount: engagement.view_count || 0,
-            lastLikeCount: engagement.like_count || 0,
-            lastCommentCount: engagement.comment_count || 0,
-            lastShareCount: engagement.share_count || 0,
-            videoDuration: contentData.duration || null,
+            tiktokVideoId: videoData.videoId,
+            lastViewCount: videoData.stats.playCount,
+            lastLikeCount: videoData.stats.diggCount,
+            lastCommentCount: videoData.stats.commentCount,
+            lastShareCount: videoData.stats.shareCount,
+            videoDuration: videoData.duration || null,
             verified: true,
             verifiedAt: new Date(),
             lastCheckedAt: new Date(),
@@ -230,7 +230,6 @@ export async function POST(req: NextRequest) {
           }
         });
 
-        // Notify creator of approval
         await prisma.notification.create({
           data: {
             userId: session.user.id,
@@ -240,12 +239,9 @@ export async function POST(req: NextRequest) {
           },
         });
 
-        // Update estimated payouts for all participants since a new creator entered the pool
         await updateEstimatedPayouts(campaignId);
-
         autoVerificationSuccess = true;
       } else {
-        // Reject submission
         await prisma.submission.update({
           where: { id: submission.id },
           data: {
@@ -255,7 +251,6 @@ export async function POST(req: NextRequest) {
           },
         });
 
-        // Notify creator of rejection
         await prisma.notification.create({
           data: {
             userId: session.user.id,
@@ -266,12 +261,9 @@ export async function POST(req: NextRequest) {
         });
       }
     } catch (verificationError: any) {
-      // Handle verification errors gracefully
       console.warn("Automatic verification failed, submission kept as PENDING:", verificationError);
 
-      // Check for specific error types
       if (verificationError.message?.includes("private") || verificationError.message?.includes("not found") || verificationError.message?.includes("herkese açık")) {
-        // Video is inaccessible - reject it
         await prisma.submission.update({
           where: { id: submission.id },
           data: {
@@ -290,7 +282,6 @@ export async function POST(req: NextRequest) {
           },
         });
       }
-      // For rate limits or other API errors, leave as PENDING for manual verification
     }
 
     // Notify artist about new submission
