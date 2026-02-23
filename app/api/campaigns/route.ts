@@ -3,7 +3,7 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { UserRole } from "@prisma/client";
 import { logApiCallSimple, extractEndpoint } from "@/lib/api-logger-simple";
-import { getCommissionFromBudget, MIN_BUDGET_TL, MAX_BUDGET_TL, MIN_DURATION_DAYS, MAX_DURATION_DAYS } from "@/server/lib/tierUtils";
+import { getCommissionFromBudget, MIN_BUDGET_TL, MAX_BUDGET_TL, MIN_DURATION_DAYS, MAX_DURATION_DAYS, MIN_NET_BUDGET_TL } from "@/server/lib/tierUtils";
 import { z } from "zod";
 
 const createCampaignSchema = z.object({
@@ -83,6 +83,15 @@ export async function POST(req: NextRequest) {
 
     // Commission: read from DB settings, fallback to budget bracket calculation
     const commissionPercent = parseInt(settingsMap.commission_percent) || getCommissionFromBudget(totalBudget) || 20;
+
+    // Validate net budget after commission >= MIN_NET_BUDGET_TL
+    const netBudget = totalBudget * (1 - commissionPercent / 100);
+    if (netBudget < MIN_NET_BUDGET_TL) {
+      return NextResponse.json(
+        { error: `Komisyon sonrası net bütçe en az ₺${MIN_NET_BUDGET_TL.toLocaleString('tr-TR')} olmalıdır.` },
+        { status: 400 }
+      );
+    }
 
     // Check if user has sufficient balance
     const user = await prisma.user.findUnique({

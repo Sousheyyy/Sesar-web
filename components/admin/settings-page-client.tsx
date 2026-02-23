@@ -66,7 +66,7 @@ export function SettingsPageClient({
 
   // Commission & Budget
   const [commissionPercent, setCommissionPercent] = useState(settings.commission_percent || "20");
-  const [minBudget, setMinBudget] = useState(settings.min_budget || "20000");
+  const [minBudget, setMinBudget] = useState(settings.min_budget || "25000");
   const [maxBudget, setMaxBudget] = useState(settings.max_budget || "1000000");
   const [minDuration, setMinDuration] = useState(settings.min_duration || "5");
   const [maxDuration, setMaxDuration] = useState(settings.max_duration || "30");

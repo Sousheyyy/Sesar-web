@@ -49,7 +49,7 @@ export function StepBudget({
                 type="number"
                 min={MIN_BUDGET}
                 max={MAX_BUDGET}
-                placeholder="20000"
+                placeholder="25000"
                 className="pl-12 h-14 text-2xl font-bold"
                 value={totalBudget}
                 onChange={(e) => onBudgetChange(e.target.value)}

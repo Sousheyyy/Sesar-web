@@ -1088,10 +1088,17 @@ export const appRouter = t.router({
       tiktokUrl: z.string().url(),
       title: z.string().min(1),
       description: z.string().optional(),
-      budget: z.number().min(20000).max(1000000), // TL
+      budget: z.number().min(25000, "Minimum kampanya bütçesi ₺25.000 olmalıdır").max(1000000), // TL
       durationDays: z.number().min(5).max(30), // User-selected duration
       minVideoDuration: z.number().optional(),
       desiredStartDate: z.string().datetime(), // ISO date string, min 3 days from now
+      // Pre-fetched song metadata from fetchSongPreview (skips Apify double-call)
+      songPreview: z.object({
+        title: z.string().min(1),
+        authorName: z.string(),
+        coverImage: z.string(),
+        tiktokMusicId: z.string().regex(/^\d{19}$/),
+      }).optional(),
     }))
     .mutation(async ({ input, ctx }) => {
       const userId = ctx.userId;
@@ -1107,17 +1114,27 @@ export const appRouter = t.router({
       }
 
       // Import budget utilities
-      const { getCommissionFromBudget } =
+      const { getCommissionFromBudget, MIN_NET_BUDGET_TL } =
         await import("@/server/lib/tierUtils");
 
-      // 1. Extract song metadata from TikTok via Apify
-      const { apifyClient } = await import("@/lib/apify/client");
+      // Check if admin has overridden commission rate
+      const commissionSetting = await prisma.systemSettings.findUnique({
+        where: { key: "commission_percent" },
+      });
 
+      // 1. Get song metadata — use pre-fetched preview or fetch from Apify
       let songMetadata;
-      try {
-        songMetadata = await apifyClient.fetchMusicMetadata(input.tiktokUrl);
-      } catch (error: any) {
-        throw new Error(`INVALID_SONG_URL: ${error.message}`);
+      if (input.songPreview) {
+        // Use pre-fetched data from fetchSongPreview (avoids double Apify call)
+        songMetadata = input.songPreview;
+      } else {
+        // Fallback: fetch from Apify (backward compat for web or direct calls)
+        const { apifyClient } = await import("@/lib/apify/client");
+        try {
+          songMetadata = await apifyClient.fetchMusicMetadata(input.tiktokUrl);
+        } catch (error: any) {
+          throw new Error(`INVALID_SONG_URL: ${error.message}`);
+        }
       }
 
       // 2. Find or Create Song
@@ -1161,9 +1178,17 @@ export const appRouter = t.router({
       const budgetTL = input.budget;
       const durationDays = input.durationDays;
 
-      // Calculate commission from budget bracket
-      const commissionPercent = getCommissionFromBudget(budgetTL);
-      if (commissionPercent === null) throw new Error("INVALID_BUDGET");
+      // Calculate commission: admin override > budget bracket
+      const commissionPercent = commissionSetting
+        ? parseInt(commissionSetting.value)
+        : getCommissionFromBudget(budgetTL);
+      if (commissionPercent === null || isNaN(commissionPercent)) throw new Error("INVALID_BUDGET");
+
+      // Validate net budget after commission >= MIN_NET_BUDGET_TL
+      const netBudget = budgetTL * (1 - commissionPercent / 100);
+      if (netBudget < MIN_NET_BUDGET_TL) {
+        throw new Error(`NET_BUDGET_TOO_LOW: Komisyon sonrası net bütçe en az ₺${MIN_NET_BUDGET_TL.toLocaleString('tr-TR')} olmalıdır.`);
+      }
 
       // 4. Deduction & Creation (Transaction — atomic balance check)
       const campaign = await prisma.$transaction(async (tx) => {
@@ -1208,6 +1233,50 @@ export const appRouter = t.router({
       });
 
       return { success: true, campaignId: campaign.id };
+    }),
+
+  fetchSongPreview: t.procedure
+    .input(z.object({
+      tiktokUrl: z.string().url(),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      const userId = ctx.userId;
+      if (!userId) throw new Error("UNAUTHORIZED");
+
+      const { TikTokUrlParser } = await import("@/lib/apify/url-utils");
+      const { apifyClient } = await import("@/lib/apify/client");
+
+      // Validate & normalize URL (handles short links, etc.)
+      const normalizedUrl = await TikTokUrlParser.validateAndNormalize(input.tiktokUrl);
+
+      // Check DB cache first — if song already exists, return it without calling Apify
+      const musicId = TikTokUrlParser.extractMusicId(normalizedUrl);
+      if (musicId) {
+        const existing = await prisma.song.findFirst({
+          where: { tiktokMusicId: musicId },
+          select: { title: true, authorName: true, coverImage: true, tiktokMusicId: true },
+        });
+        if (existing && existing.title && existing.tiktokMusicId) {
+          return {
+            title: existing.title,
+            authorName: existing.authorName || "",
+            coverImage: existing.coverImage || "",
+            tiktokMusicId: existing.tiktokMusicId,
+            cached: true,
+          };
+        }
+      }
+
+      // Fetch from Apify
+      const metadata = await apifyClient.fetchMusicMetadata(normalizedUrl);
+
+      return {
+        title: metadata.title,
+        authorName: metadata.authorName,
+        coverImage: metadata.coverImage,
+        tiktokMusicId: metadata.tiktokMusicId,
+        cached: false,
+      };
     }),
 
   getMyCampaigns: t.procedure

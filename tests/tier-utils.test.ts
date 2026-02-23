@@ -15,13 +15,13 @@ import {
 // =========================================================================
 describe('getCommissionFromBudget', () => {
   it('returns null for budget below minimum', () => {
-    expect(getCommissionFromBudget(19999)).toBeNull();
+    expect(getCommissionFromBudget(24999)).toBeNull();
     expect(getCommissionFromBudget(0)).toBeNull();
     expect(getCommissionFromBudget(-1000)).toBeNull();
   });
 
-  it('returns 20% for 20k-39,999', () => {
-    expect(getCommissionFromBudget(20000)).toBe(20);
+  it('returns 20% for 25k-39,999', () => {
+    expect(getCommissionFromBudget(25000)).toBe(20);
     expect(getCommissionFromBudget(30000)).toBe(20);
     expect(getCommissionFromBudget(39999)).toBe(20);
   });
@@ -53,7 +53,7 @@ describe('getCommissionFromBudget', () => {
   });
 
   it('commission decreases as budget increases', () => {
-    const budgets = [20000, 40000, 70000, 100000];
+    const budgets = [25000, 40000, 70000, 100000];
     const commissions = budgets.map(b => getCommissionFromBudget(b)!);
     for (let i = 1; i < commissions.length; i++) {
       expect(commissions[i]).toBeLessThan(commissions[i - 1]);
@@ -77,7 +77,7 @@ describe('getEstimatedReach', () => {
   });
 
   it('higher budget = higher reach', () => {
-    const low = getEstimatedReach(20000, 15);
+    const low = getEstimatedReach(25000, 15);
     const high = getEstimatedReach(39000, 15);
     expect(high.min).toBeGreaterThan(low.min);
     expect(high.max).toBeGreaterThan(low.max);
@@ -126,7 +126,7 @@ describe('getEstimatedEngagement', () => {
 // Constants
 // =========================================================================
 describe('Budget constants', () => {
-  it('MIN_BUDGET is 20000', () => expect(MIN_BUDGET_TL).toBe(20000));
+  it('MIN_BUDGET is 25000', () => expect(MIN_BUDGET_TL).toBe(25000));
   it('MAX_BUDGET is 1000000', () => expect(MAX_BUDGET_TL).toBe(1000000));
   it('MIN_DURATION is 5', () => expect(MIN_DURATION_DAYS).toBe(5));
   it('MAX_DURATION is 30', () => expect(MAX_DURATION_DAYS).toBe(30));
@@ -137,7 +137,7 @@ describe('Budget constants', () => {
 // =========================================================================
 describe('getBudgetBracket', () => {
   it('returns null for budget below minimum', () => {
-    expect(getBudgetBracket(19999)).toBeNull();
+    expect(getBudgetBracket(24999)).toBeNull();
   });
 
   it('returns correct bracket for each range', () => {
