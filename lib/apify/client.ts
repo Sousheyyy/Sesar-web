@@ -172,6 +172,18 @@ export class ApifyClient {
   }
 
   /**
+   * Extracts the awemeId (video ID) from a TikTok video URL.
+   * Supports formats:
+   *   - https://www.tiktok.com/@username/video/6811123699203329285
+   *   - https://www.tiktok.com/@username/video/6811123699203329285?...
+   *   - https://vm.tiktok.com/ZMxxxxxx/ (short links must be resolved first)
+   */
+  private extractAwemeId(url: string): string | null {
+    const match = url.match(/\/video\/(\d+)/);
+    return match ? match[1] : null;
+  }
+
+  /**
    * Fetches video details from a TikTok video URL via the scraptik/tiktok-api actor.
    * Used for video validation (owner match, song match, public status) and metric collection.
    */
@@ -184,7 +196,13 @@ export class ApifyClient {
       const actorId = this.getVideoActorId();
       const timeoutSecs = Math.floor(this.getTimeout() / 1000);
 
-      // Start actor run with the video URL
+      // Extract awemeId from the TikTok URL
+      const awemeId = this.extractAwemeId(videoUrl);
+      if (!awemeId) {
+        throw new Error('Could not extract video ID from TikTok URL. Make sure the URL contains /video/{id}');
+      }
+
+      // Start actor run with post_awemeId
       const runRes = await fetch(
         `${APIFY_BASE_URL}/acts/${actorId}/runs?waitForFinish=${timeoutSecs}`,
         {
@@ -194,8 +212,7 @@ export class ApifyClient {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            urls: [videoUrl],
-            type: 'video',
+            post_awemeId: awemeId,
           }),
         }
       );
@@ -230,27 +247,34 @@ export class ApifyClient {
         throw new Error('No video data found for this TikTok URL');
       }
 
-      const raw = items[0];
+      // The actor may return the data directly or nested under aweme_detail
+      const rawItem = items[0];
+      const raw = rawItem.aweme_detail || rawItem;
 
-      // Normalize the response — scraptik/tiktok-api returns TikTok's internal format
+      console.log('Apify raw response keys:', Object.keys(raw));
+      console.log('Apify raw author:', JSON.stringify(raw.author, null, 2)?.substring(0, 300));
+      console.log('Apify raw stats/statistics:', JSON.stringify(raw.stats || raw.statistics, null, 2)?.substring(0, 300));
+      console.log('Apify raw music:', JSON.stringify(raw.music, null, 2)?.substring(0, 300));
+
+      // Normalize the response — scraptik/tiktok-api returns TikTok's internal format (snake_case)
       const video: VideoData = {
-        videoId: raw.id || raw.video_id || String(raw.aweme_id || ''),
-        authorUniqueId: raw.author?.uniqueId || raw.author?.unique_id || '',
+        videoId: String(raw.aweme_id || raw.id || raw.video_id || ''),
+        authorUniqueId: raw.author?.unique_id || raw.author?.uniqueId || '',
         authorNickname: raw.author?.nickname || '',
         coverImage: raw.video?.cover?.url_list?.[0] || raw.video?.origin_cover?.url_list?.[0] || '',
         duration: raw.video?.duration || raw.duration || 0,
-        createTime: raw.createTime || raw.create_time || 0,
+        createTime: raw.create_time || raw.createTime || 0,
         isPrivate: raw.is_private ?? raw.isPrivate ?? false,
         stats: {
-          playCount: raw.stats?.playCount ?? raw.statistics?.play_count ?? 0,
-          diggCount: raw.stats?.diggCount ?? raw.statistics?.digg_count ?? 0,
-          shareCount: raw.stats?.shareCount ?? raw.statistics?.share_count ?? 0,
-          commentCount: raw.stats?.commentCount ?? raw.statistics?.comment_count ?? 0,
+          playCount: raw.statistics?.play_count ?? raw.stats?.playCount ?? 0,
+          diggCount: raw.statistics?.digg_count ?? raw.stats?.diggCount ?? 0,
+          shareCount: raw.statistics?.share_count ?? raw.stats?.shareCount ?? 0,
+          commentCount: raw.statistics?.comment_count ?? raw.stats?.commentCount ?? 0,
         },
         music: {
           title: raw.music?.title || '',
           id: raw.music?.id ? String(raw.music.id) : (raw.music?.id_str || ''),
-          authorName: raw.music?.authorName || raw.music?.author || '',
+          authorName: raw.music?.author || raw.music?.authorName || '',
         },
       };
 
