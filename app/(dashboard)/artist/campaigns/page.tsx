@@ -7,7 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatCurrency, formatDate, formatNumber } from "@/lib/utils";
-import { Music2, Plus, Calendar, Users, TrendingUp, Eye, Heart, Share2, Clock } from "lucide-react";
+import { Music2, Plus, Calendar, Users, TrendingUp, Eye, Heart, Share2 } from "lucide-react";
 
 // Force dynamic rendering for Cloudflare Pages
 export const dynamic = 'force-dynamic';
@@ -51,7 +51,6 @@ export default async function ArtistCampaignsPage() {
   });
 
   const activeCampaigns = allMyCampaigns.filter((c) => c.status === "ACTIVE");
-  const pendingCampaigns = allMyCampaigns.filter((c) => c.status === "PENDING_APPROVAL");
   const endedCampaigns = allMyCampaigns.filter((c) =>
     ["COMPLETED", "CANCELLED", "REJECTED"].includes(c.status)
   );
@@ -104,18 +103,12 @@ export default async function ArtistCampaignsPage() {
                         ? "success"
                         : campaign.status === "COMPLETED"
                         ? "secondary"
-                        : campaign.status === "PENDING_APPROVAL"
-                        ? "warning"
-                        : campaign.status === "PAUSED"
-                        ? "warning"
                         : "destructive"
                     }
                     className="shrink-0"
                   >
                     {campaign.status === "ACTIVE" && "AKTİF"}
-                    {campaign.status === "PENDING_APPROVAL" && "ONAY BEKLİYOR"}
                     {campaign.status === "COMPLETED" && "TAMAMLANDI"}
-                    {campaign.status === "PAUSED" && "DURAKLATILDI"}
                     {campaign.status === "CANCELLED" && "İPTAL"}
                     {campaign.status === "REJECTED" && "REDDEDİLDİ"}
                   </Badge>
@@ -240,7 +233,7 @@ export default async function ArtistCampaignsPage() {
       </div>
 
       <Tabs defaultValue="tumu" className="w-full">
-        <TabsList className="grid w-full max-w-lg grid-cols-4 bg-white/5 border border-white/10">
+        <TabsList className="grid w-full max-w-lg grid-cols-3 bg-white/5 border border-white/10">
           <TabsTrigger
             value="tumu"
             className="data-[state=active]:bg-purple-600 data-[state=active]:text-white"
@@ -252,12 +245,6 @@ export default async function ArtistCampaignsPage() {
             className="data-[state=active]:bg-purple-600 data-[state=active]:text-white"
           >
             Aktif ({activeCampaigns.length})
-          </TabsTrigger>
-          <TabsTrigger
-            value="bekleyen"
-            className="data-[state=active]:bg-purple-600 data-[state=active]:text-white"
-          >
-            Bekleyen ({pendingCampaigns.length})
           </TabsTrigger>
           <TabsTrigger
             value="sonlanan"
@@ -286,16 +273,6 @@ export default async function ArtistCampaignsPage() {
             "Aktif kampanya yok",
             "Aktif kampanyalarınız burada görünecek",
             true
-          )}
-        </TabsContent>
-
-        {/* Bekleyen Tab */}
-        <TabsContent value="bekleyen" className="mt-6">
-          {renderCampaignGrid(
-            pendingCampaigns,
-            <Clock className="h-12 w-12 text-white/20 mb-4" />,
-            "Onay bekleyen kampanya yok",
-            "Onay bekleyen kampanyalarınız burada görünecek"
           )}
         </TabsContent>
 

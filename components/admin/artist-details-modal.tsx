@@ -78,16 +78,12 @@ export function ArtistDetailsModal({ user, open, onClose }: ArtistDetailsModalPr
     const variants: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
       ACTIVE: "default",
       COMPLETED: "default",
-      PENDING_APPROVAL: "secondary",
-      PAUSED: "outline",
       CANCELLED: "destructive",
     };
 
     const labels: Record<string, string> = {
       ACTIVE: "Aktif",
       COMPLETED: "Tamamlandı",
-      PENDING_APPROVAL: "Onay Bekliyor",
-      PAUSED: "Duraklatıldı",
       CANCELLED: "İptal Edildi",
     };
 

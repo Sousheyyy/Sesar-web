@@ -2,33 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { CalculationService } from '@/server/services/calculationService';
 
 // =========================================================================
-// 1. calculatePoints
-// =========================================================================
-describe('CalculationService.calculatePoints', () => {
-  it('returns correct points for standard engagement', () => {
-    const result = CalculationService.calculatePoints(10000, 500, 100);
-    expect(result.viewPoints).toBe(100);      // 10000 * 0.01
-    expect(result.likePoints).toBe(250);       // 500 * 0.5
-    expect(result.sharePoints).toBe(100);      // 100 * 1.0
-    expect(result.totalPoints).toBe(450);
-  });
-
-  it('returns zero points for zero engagement', () => {
-    const result = CalculationService.calculatePoints(0, 0, 0);
-    expect(result.totalPoints).toBe(0);
-  });
-
-  it('handles very large numbers', () => {
-    const result = CalculationService.calculatePoints(100_000_000, 10_000_000, 5_000_000);
-    expect(result.viewPoints).toBe(1_000_000);
-    expect(result.likePoints).toBe(5_000_000);
-    expect(result.sharePoints).toBe(5_000_000);
-    expect(result.totalPoints).toBe(11_000_000);
-  });
-});
-
-// =========================================================================
-// 2. calculateSharePercent
+// 1. calculateSharePercent (views-based)
 // =========================================================================
 describe('CalculationService.calculateSharePercent', () => {
   it('returns raw share when below 40% cap', () => {
@@ -41,12 +15,12 @@ describe('CalculationService.calculateSharePercent', () => {
     expect(share).toBe(0.40);
   });
 
-  it('returns 0 when campaign has no points', () => {
+  it('returns 0 when campaign has no views', () => {
     const share = CalculationService.calculateSharePercent(100, 0);
     expect(share).toBe(0);
   });
 
-  it('returns 0 when submission has no points', () => {
+  it('returns 0 when submission has no views', () => {
     const share = CalculationService.calculateSharePercent(0, 1000);
     expect(share).toBe(0);
   });
@@ -58,16 +32,16 @@ describe('CalculationService.calculateSharePercent', () => {
 });
 
 // =========================================================================
-// 3. calculateNetBudget
+// 2. calculateNetBudget
 // =========================================================================
 describe('CalculationService.calculateNetBudget', () => {
-  it('calculates net budget for tier C (20% commission)', () => {
+  it('calculates net budget for 20% commission', () => {
     const result = CalculationService.calculateNetBudget(30000, 20);
     expect(result.netBudgetTL).toBe(24000);
     expect(result.netMultiplier).toBe(0.80);
   });
 
-  it('calculates net budget for tier S (10% commission)', () => {
+  it('calculates net budget for 10% commission', () => {
     const result = CalculationService.calculateNetBudget(100000, 10);
     expect(result.netBudgetTL).toBe(90000);
     expect(result.netMultiplier).toBe(0.90);
@@ -80,154 +54,194 @@ describe('CalculationService.calculateNetBudget', () => {
 });
 
 // =========================================================================
-// 4. checkInsuranceThresholds
+// 3. checkInsuranceThresholds (budget-based, views-only)
 // =========================================================================
 describe('CalculationService.checkInsuranceThresholds', () => {
-  it('passes when all thresholds met (tier C)', () => {
-    const result = CalculationService.checkInsuranceThresholds('C', 5, 600, 60000);
+  it('passes when all thresholds met (25k-39k bracket)', () => {
+    const result = CalculationService.checkInsuranceThresholds(30000, 5, 60000);
     expect(result.passed).toBe(true);
     expect(result.failedChecks).toHaveLength(0);
   });
 
-  it('fails when submissions below threshold (tier C)', () => {
-    const result = CalculationService.checkInsuranceThresholds('C', 2, 600, 60000);
+  it('fails when submissions below threshold', () => {
+    const result = CalculationService.checkInsuranceThresholds(30000, 2, 60000);
     expect(result.passed).toBe(false);
     expect(result.failedChecks.some(c => c.includes('Submissions'))).toBe(true);
   });
 
-  it('fails when points below threshold (tier B)', () => {
-    const result = CalculationService.checkInsuranceThresholds('B', 10, 1000, 500000);
-    expect(result.passed).toBe(false);
-    expect(result.failedChecks.some(c => c.includes('Points'))).toBe(true);
-  });
-
-  it('fails when views below threshold (tier A)', () => {
-    const result = CalculationService.checkInsuranceThresholds('A', 10, 6000, 100000);
+  it('fails when views below threshold', () => {
+    const result = CalculationService.checkInsuranceThresholds(30000, 5, 10000);
     expect(result.passed).toBe(false);
     expect(result.failedChecks.some(c => c.includes('Views'))).toBe(true);
   });
 
   it('reports multiple failures simultaneously', () => {
-    const result = CalculationService.checkInsuranceThresholds('S', 1, 100, 1000);
+    const result = CalculationService.checkInsuranceThresholds(100000, 1, 1000);
     expect(result.passed).toBe(false);
-    expect(result.failedChecks).toHaveLength(3);
+    expect(result.failedChecks).toHaveLength(2); // submissions + views
   });
 
-  it('fails for unknown tier', () => {
-    const result = CalculationService.checkInsuranceThresholds('X', 100, 100000, 10000000);
-    expect(result.passed).toBe(false);
-    expect(result.failedChecks[0]).toBe('Unknown tier');
-  });
-
-  it('passes tier S with high metrics', () => {
-    const result = CalculationService.checkInsuranceThresholds('S', 20, 20000, 2_000_000);
+  it('passes 100k+ bracket with high metrics', () => {
+    const result = CalculationService.checkInsuranceThresholds(100000, 20, 2_000_000);
     expect(result.passed).toBe(true);
   });
 });
 
 // =========================================================================
-// 5. filterEligibleSubmissions
+// 4. getInsuranceThresholds (budget brackets)
+// =========================================================================
+describe('CalculationService.getInsuranceThresholds', () => {
+  it('returns lowest thresholds for 25k-39k', () => {
+    const t = CalculationService.getInsuranceThresholds(25000);
+    expect(t.minSubmissions).toBe(3);
+    expect(t.minViews).toBe(50_000);
+  });
+
+  it('returns mid thresholds for 40k-69k', () => {
+    const t = CalculationService.getInsuranceThresholds(50000);
+    expect(t.minSubmissions).toBe(5);
+    expect(t.minViews).toBe(200_000);
+  });
+
+  it('returns higher thresholds for 70k-99k', () => {
+    const t = CalculationService.getInsuranceThresholds(80000);
+    expect(t.minSubmissions).toBe(8);
+    expect(t.minViews).toBe(500_000);
+  });
+
+  it('returns highest thresholds for 100k+', () => {
+    const t = CalculationService.getInsuranceThresholds(200000);
+    expect(t.minSubmissions).toBe(15);
+    expect(t.minViews).toBe(1_500_000);
+  });
+
+  it('thresholds increase with budget', () => {
+    const budgets = [25000, 40000, 70000, 100000];
+    for (let i = 1; i < budgets.length; i++) {
+      const prev = CalculationService.getInsuranceThresholds(budgets[i - 1]);
+      const curr = CalculationService.getInsuranceThresholds(budgets[i]);
+      expect(curr.minSubmissions).toBeGreaterThanOrEqual(prev.minSubmissions);
+      expect(curr.minViews).toBeGreaterThanOrEqual(prev.minViews);
+    }
+  });
+});
+
+// =========================================================================
+// 5. filterEligibleSubmissions (views-only, 0.01% threshold)
 // =========================================================================
 describe('CalculationService.filterEligibleSubmissions', () => {
   const submissions = [
-    { id: 'sub1', totalPoints: 200 },  // 20% of 1000 → eligible
-    { id: 'sub2', totalPoints: 40 },   // 4% but below 50 points → ineligible
-    { id: 'sub3', totalPoints: 0 },    // 0 → ineligible
-    { id: 'sub4', totalPoints: 60 },   // 6% and >= 50 points → eligible
-    { id: 'sub5', totalPoints: 700 },  // 70% → eligible
+    { id: 'sub1', lastViewCount: 20000 },  // 20% of 100k → eligible
+    { id: 'sub2', lastViewCount: 50 },     // 0.05% → eligible (above 0.01%)
+    { id: 'sub3', lastViewCount: 0 },      // 0% → ineligible
+    { id: 'sub4', lastViewCount: 5000 },   // 5% → eligible
+    { id: 'sub5', lastViewCount: 75000 },  // 75% → eligible
   ];
-  const totalPoints = 1000;
+  const totalViews = 100000;
 
-  it('filters by both points and contribution thresholds', () => {
-    const eligible = CalculationService.filterEligibleSubmissions(submissions, totalPoints);
-    expect(eligible.map(s => s.id)).toEqual(['sub1', 'sub4', 'sub5']);
+  it('filters by 0.01% contribution threshold', () => {
+    const eligible = CalculationService.filterEligibleSubmissions(submissions, totalViews);
+    expect(eligible.map(s => s.id)).toEqual(['sub1', 'sub2', 'sub4', 'sub5']);
   });
 
-  it('returns empty when total points is 0', () => {
+  it('returns empty when total views is 0', () => {
     const eligible = CalculationService.filterEligibleSubmissions(submissions, 0);
     expect(eligible).toHaveLength(0);
   });
 
-  it('excludes submissions below 50 points', () => {
+  it('excludes submissions below 0.01% share', () => {
     const eligible = CalculationService.filterEligibleSubmissions(
-      [{ id: 'a', totalPoints: 49 }], 100
+      [{ id: 'a', lastViewCount: 9 }], 100000 // 0.009% < 0.01%
     );
     expect(eligible).toHaveLength(0);
   });
 
-  it('includes submission at exactly 50 points if contribution >= 0.1%', () => {
+  it('includes submission at exactly 0.01% share', () => {
     const eligible = CalculationService.filterEligibleSubmissions(
-      [{ id: 'a', totalPoints: 50 }], 50000 // 0.1% contribution
+      [{ id: 'a', lastViewCount: 10 }], 100000 // 0.01% exactly
     );
     expect(eligible).toHaveLength(1);
   });
 
-  it('excludes submission with high points but tiny contribution', () => {
-    // 50 points but 0.05% contribution (below 0.1% threshold)
+  it('includes all when everyone has meaningful views', () => {
     const eligible = CalculationService.filterEligibleSubmissions(
-      [{ id: 'a', totalPoints: 50 }], 100000
+      [
+        { id: 'a', lastViewCount: 5000 },
+        { id: 'b', lastViewCount: 3000 },
+        { id: 'c', lastViewCount: 2000 },
+      ],
+      10000
     );
-    expect(eligible).toHaveLength(0);
+    expect(eligible).toHaveLength(3);
   });
 });
 
 // =========================================================================
-// 6. calculateApproximateEarnings
+// 6. calculateApproximateEarnings (views-based)
 // =========================================================================
 describe('CalculationService.calculateApproximateEarnings', () => {
   it('calculates proportional earnings without Robin Hood', () => {
     const result = CalculationService.calculateApproximateEarnings(
-      { totalPoints: 100, estimatedEarnings: 0, sharePercent: 0 },
-      { lastBatchTotalPoints: 0, lastBatchAt: null, totalCampaignPoints: 1000 },
+      { lastViewCount: 10000, estimatedEarnings: 0, sharePercent: 0 },
+      100000,
       { totalBudget: 30000, commissionPercent: 20 }
     );
-    // netBudget = 24000, raw share = 100/1000 = 10%
+    // netBudget = 24000, raw share = 10000/100000 = 10%
     expect(result.approximateEarningsTL).toBe(2400);
     expect(result.approximateSharePercent).toBe(10);
-    expect(result.isApproximate).toBe(false); // lastBatchAt is null
   });
 
-  it('returns zero when submission has no points', () => {
+  it('returns zero when submission has no views', () => {
     const result = CalculationService.calculateApproximateEarnings(
-      { totalPoints: 0, estimatedEarnings: 0, sharePercent: 0 },
-      { lastBatchTotalPoints: 500, lastBatchAt: new Date(), totalCampaignPoints: 1000 },
+      { lastViewCount: 0, estimatedEarnings: 0, sharePercent: 0 },
+      100000,
       { totalBudget: 30000, commissionPercent: 20 }
     );
     expect(result.approximateEarningsTL).toBe(0);
   });
 
-  it('returns zero when campaign has no points', () => {
+  it('returns zero when campaign has no views', () => {
     const result = CalculationService.calculateApproximateEarnings(
-      { totalPoints: 100, estimatedEarnings: 0, sharePercent: 0 },
-      { lastBatchTotalPoints: 0, lastBatchAt: null, totalCampaignPoints: 0 },
+      { lastViewCount: 10000, estimatedEarnings: 0, sharePercent: 0 },
+      0,
       { totalBudget: 30000, commissionPercent: 20 }
     );
     expect(result.approximateEarningsTL).toBe(0);
   });
 
-  it('preserves confirmed earnings from last batch', () => {
+  it('preserves confirmed earnings', () => {
     const result = CalculationService.calculateApproximateEarnings(
-      { totalPoints: 100, estimatedEarnings: 500, sharePercent: 0.05 },
-      { lastBatchTotalPoints: 1000, lastBatchAt: new Date(), totalCampaignPoints: 1000 },
+      { lastViewCount: 10000, estimatedEarnings: 500, sharePercent: 0.05 },
+      100000,
       { totalBudget: 30000, commissionPercent: 20 }
     );
     expect(result.confirmedEarningsTL).toBe(500);
     expect(result.confirmedSharePercent).toBe(0.05);
-    expect(result.isApproximate).toBe(true);
+  });
+
+  it('caps approximate share at 40%', () => {
+    const result = CalculationService.calculateApproximateEarnings(
+      { lastViewCount: 90000, estimatedEarnings: 0, sharePercent: 0 },
+      100000,
+      { totalBudget: 30000, commissionPercent: 20 }
+    );
+    // netBudget = 24000, rawShare = 90% but capped at 40%
+    expect(result.approximateSharePercent).toBe(40);
+    expect(result.approximateEarningsTL).toBe(9600); // 24000 * 0.40
   });
 });
 
 // =========================================================================
-// 7. computeRobinHoodShares
+// 7. computeRobinHoodShares (views-based)
 // =========================================================================
 describe('CalculationService.computeRobinHoodShares', () => {
   it('distributes proportionally when no one exceeds cap', () => {
     const submissions = [
-      { id: 'a', totalPoints: 300 },
-      { id: 'b', totalPoints: 300 },
-      { id: 'c', totalPoints: 400 },
+      { id: 'a', lastViewCount: 3000 },
+      { id: 'b', lastViewCount: 3000 },
+      { id: 'c', lastViewCount: 4000 },
     ];
-    const results = CalculationService.computeRobinHoodShares(submissions, 1000, 24000);
+    const results = CalculationService.computeRobinHoodShares(submissions, 10000, 24000);
 
     expect(results).toHaveLength(3);
     expect(results.find(r => r.id === 'a')!.sharePercent).toBeCloseTo(0.30, 2);
@@ -238,11 +252,11 @@ describe('CalculationService.computeRobinHoodShares', () => {
 
   it('caps dominant creator at 40% and redistributes', () => {
     const submissions = [
-      { id: 'a', totalPoints: 800 },   // 80% → should be capped to 40%
-      { id: 'b', totalPoints: 100 },   // 10%
-      { id: 'c', totalPoints: 100 },   // 10%
+      { id: 'a', lastViewCount: 80000 },  // 80% → cap at 40%
+      { id: 'b', lastViewCount: 10000 },  // 10%
+      { id: 'c', lastViewCount: 10000 },  // 10%
     ];
-    const results = CalculationService.computeRobinHoodShares(submissions, 1000, 24000);
+    const results = CalculationService.computeRobinHoodShares(submissions, 100000, 24000);
 
     const aSub = results.find(r => r.id === 'a')!;
     expect(aSub.sharePercent).toBe(0.40);
@@ -256,70 +270,49 @@ describe('CalculationService.computeRobinHoodShares', () => {
 
   it('caps at most 2 creators at 40%', () => {
     const submissions = [
-      { id: 'a', totalPoints: 500 },  // 50% → cap
-      { id: 'b', totalPoints: 400 },  // 40% → cap
-      { id: 'c', totalPoints: 100 },  // 10%
+      { id: 'a', lastViewCount: 50000 },  // 50% → cap
+      { id: 'b', lastViewCount: 40000 },  // 40% → cap
+      { id: 'c', lastViewCount: 10000 },  // 10%
     ];
-    const results = CalculationService.computeRobinHoodShares(submissions, 1000, 24000);
+    const results = CalculationService.computeRobinHoodShares(submissions, 100000, 24000);
 
-    const aSub = results.find(r => r.id === 'a')!;
-    const bSub = results.find(r => r.id === 'b')!;
-    expect(aSub.sharePercent).toBe(0.40);
-    expect(bSub.sharePercent).toBe(0.40);
-
-    // c gets remaining 20%
-    const cSub = results.find(r => r.id === 'c')!;
-    expect(cSub.sharePercent).toBeCloseTo(0.20, 2);
-  });
-
-  it('handles 3+ dominant creators (3rd gets 39.99%)', () => {
-    const submissions = [
-      { id: 'a', totalPoints: 500 },  // 50% → cap at 40%
-      { id: 'b', totalPoints: 450 },  // 45% → cap at 40%
-      { id: 'c', totalPoints: 450 },  // 45% (rescaled) → should be near 39.99%
-      { id: 'd', totalPoints: 10 },   // tiny
-    ];
-    const total = 1410;
-    const results = CalculationService.computeRobinHoodShares(submissions, total, 24000);
-
-    // At most 2 can be exactly at 40%
-    const at40 = results.filter(r => r.sharePercent === 0.40);
-    expect(at40.length).toBeLessThanOrEqual(2);
+    expect(results.find(r => r.id === 'a')!.sharePercent).toBe(0.40);
+    expect(results.find(r => r.id === 'b')!.sharePercent).toBe(0.40);
+    expect(results.find(r => r.id === 'c')!.sharePercent).toBeCloseTo(0.20, 2);
   });
 
   it('returns empty for empty submissions', () => {
-    const results = CalculationService.computeRobinHoodShares([], 1000, 24000);
+    const results = CalculationService.computeRobinHoodShares([], 10000, 24000);
     expect(results).toHaveLength(0);
   });
 
-  it('returns empty for zero campaign points', () => {
+  it('returns empty for zero campaign views', () => {
     const results = CalculationService.computeRobinHoodShares(
-      [{ id: 'a', totalPoints: 100 }], 0, 24000
+      [{ id: 'a', lastViewCount: 1000 }], 0, 24000
     );
     expect(results).toHaveLength(0);
   });
 
   it('total earnings sum to netBudget', () => {
     const submissions = [
-      { id: 'a', totalPoints: 300 },
-      { id: 'b', totalPoints: 500 },
-      { id: 'c', totalPoints: 200 },
+      { id: 'a', lastViewCount: 3000 },
+      { id: 'b', lastViewCount: 5000 },
+      { id: 'c', lastViewCount: 2000 },
     ];
-    const results = CalculationService.computeRobinHoodShares(submissions, 1000, 24000);
-
+    const results = CalculationService.computeRobinHoodShares(submissions, 10000, 24000);
     const totalEarnings = results.reduce((sum, r) => sum + r.earningsTL, 0);
     expect(totalEarnings).toBeCloseTo(24000, 0);
   });
 
-  it('single submission gets 100% (no redistribution target)', () => {
+  it('single submission gets capped at 40% (excess stays with artist)', () => {
     const results = CalculationService.computeRobinHoodShares(
-      [{ id: 'a', totalPoints: 1000 }],
-      1000,
+      [{ id: 'a', lastViewCount: 10000 }],
+      10000,
       24000
     );
-    // Only 1 submission — cap fires but excess redistributes back to itself
-    expect(results[0].sharePercent).toBeCloseTo(1.0, 2);
-    expect(results[0].earningsTL).toBeCloseTo(24000, 0);
+    // Single creator still gets capped at 40% — no uncapped creators to redistribute to
+    expect(results[0].sharePercent).toBeCloseTo(0.40, 2);
+    expect(results[0].earningsTL).toBeCloseTo(9600, 0); // 24000 * 0.40
   });
 });
 
@@ -327,43 +320,11 @@ describe('CalculationService.computeRobinHoodShares', () => {
 // 8. Constants validation
 // =========================================================================
 describe('CalculationService constants', () => {
-  it('insurance refund is 95%', () => {
-    expect(CalculationService.INSURANCE_REFUND_PERCENT).toBe(0.95);
+  it('min eligible contribution is 0.01%', () => {
+    expect(CalculationService.MIN_ELIGIBLE_CONTRIBUTION).toBe(0.0001);
   });
 
-  it('artist cancel refund is 100%', () => {
-    expect(CalculationService.ARTIST_CANCEL_REFUND_PERCENT).toBe(1.00);
-  });
-
-  it('admin reject refund is 100%', () => {
-    expect(CalculationService.ADMIN_REJECT_REFUND_PERCENT).toBe(1.00);
-  });
-
-  it('min eligible points is 50', () => {
-    expect(CalculationService.MIN_ELIGIBLE_POINTS).toBe(50);
-  });
-
-  it('min eligible contribution is 0.1%', () => {
-    expect(CalculationService.MIN_ELIGIBLE_CONTRIBUTION).toBe(0.001);
-  });
-
-  it('all tiers have insurance thresholds', () => {
-    for (const tier of ['C', 'B', 'A', 'S'] as const) {
-      const t = CalculationService.INSURANCE_THRESHOLDS[tier];
-      expect(t.minSubmissions).toBeGreaterThan(0);
-      expect(t.minPoints).toBeGreaterThan(0);
-      expect(t.minViews).toBeGreaterThan(0);
-    }
-  });
-
-  it('tier thresholds are ordered by difficulty (C < B < A < S)', () => {
-    const tiers = ['C', 'B', 'A', 'S'] as const;
-    for (let i = 1; i < tiers.length; i++) {
-      const prev = CalculationService.INSURANCE_THRESHOLDS[tiers[i - 1]];
-      const curr = CalculationService.INSURANCE_THRESHOLDS[tiers[i]];
-      expect(curr.minSubmissions).toBeGreaterThanOrEqual(prev.minSubmissions);
-      expect(curr.minPoints).toBeGreaterThanOrEqual(prev.minPoints);
-      expect(curr.minViews).toBeGreaterThanOrEqual(prev.minViews);
-    }
+  it('max submissions per creator is 10', () => {
+    expect(CalculationService.MAX_SUBMISSIONS_PER_CREATOR).toBe(10);
   });
 });

@@ -44,12 +44,8 @@ export default async function AdminCampaignsPage() {
 
   const stats = {
     total: campaigns.length,
-    pending: campaigns.filter((c) => c.status === "PENDING_APPROVAL").length,
     active: campaigns.filter((c) => c.status === "ACTIVE").length,
     completed: campaigns.filter((c) => c.status === "COMPLETED").length,
-    cancelled: campaigns.filter((c) => c.status === "CANCELLED").length,
-    rejected: campaigns.filter((c) => c.status === "REJECTED").length,
-    paused: campaigns.filter((c) => c.status === "PAUSED").length,
   };
 
   return <CampaignsPageClient campaigns={serialized} stats={stats} />;

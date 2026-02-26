@@ -16,10 +16,6 @@ interface CampaignStatusChartProps {
 const STATUS_COLORS: Record<CampaignStatus, string> = {
   ACTIVE: "#22c55e",
   COMPLETED: "#3b82f6",
-  PENDING_APPROVAL: "#eab308",
-  PAUSED: "#71717a",
-  CANCELLED: "#ef4444",
-  REJECTED: "#dc2626",
 };
 
 export function CampaignStatusChart({ data }: CampaignStatusChartProps) {

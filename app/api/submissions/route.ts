@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { apifyClient } from "@/lib/apify/client";
+import { tiktokService } from "@/lib/tiktok/tiktok-service";
 import { updateEstimatedPayouts } from "@/lib/payout";
 import { logApiCallSimple, extractEndpoint } from "@/lib/api-logger-simple";
 
@@ -171,7 +171,7 @@ export async function POST(req: NextRequest) {
     let rejectionReason = "";
 
     try {
-      const { video: videoData } = await apifyClient.fetchVideoData(tiktokUrl);
+      const { data: videoData } = await tiktokService.fetchVideoData(tiktokUrl, 'api:auto-verify');
 
       // Check: Video is public
       if (videoData.isPrivate) {

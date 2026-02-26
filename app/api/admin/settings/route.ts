@@ -38,6 +38,7 @@ export async function PUT(req: NextRequest) {
       "minDurationDays", "maxDurationDays", "insuranceThreshold",
       "robinHoodCap", "minWithdrawal", "maxWithdrawal",
       "maintenanceMode", "announcementMessage",
+      "commission_percent",
     ]);
 
     const entries = Object.entries(settings);

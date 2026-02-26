@@ -25,12 +25,8 @@ enum Tier {
 }
 
 enum CampaignStatus {
-  PENDING_APPROVAL
   ACTIVE
-  PAUSED
   COMPLETED
-  REJECTED
-  CANCELLED
 }
 
 enum PayoutStatus {
@@ -185,7 +181,7 @@ model Campaign {
   // Campaign details
   title           String
   description     String?        @db.Text
-  status          CampaignStatus @default(PENDING_APPROVAL)
+  status          CampaignStatus @default(ACTIVE)
   
   // Timestamps
   createdAt       DateTime       @default(now())
@@ -196,12 +192,13 @@ model Campaign {
 
   // v2: Scheduling & approval
   desiredStartDate DateTime?     // Artist's chosen start date (min createdAt + 3 days)
-  rejectionReason  String?       @db.Text // Admin's reason for rejection
-  lockedAt         DateTime?     // When submissions were locked (23:00 on end day)
+  lockedAt         DateTime?     // When submissions were locked (1h before endDate)
+  nextMetricsFetchAt DateTime?   // Next scheduled metrics fetch (24h cadence from startDate)
+  metricsProcessingAt DateTime?  // Set when cron starts processing; cleared on completion (concurrency guard)
   insuranceTriggered Boolean     @default(false) // Whether insurance refund was applied
 
   // Computed fields for backend calculations
-  totalCampaignPoints Float        @default(0)  // Sum of all submission points
+  totalCampaignPoints Float        @default(0)  // Total views across all submissions (views-only system)
   netBudgetTP         Float        @default(0)  // DEPRECATED - no longer used
   netMultiplier       Float        @default(0)  // (100 - commissionPercent) / 100
 
@@ -222,6 +219,7 @@ model Campaign {
   @@index([status, endDate, lockedAt]) // For pre-distribute and distribute crons
   @@index([artistId, createdAt(sort: Desc)]) // For getMyCampaigns optimization
   @@index([title]) // For search optimization
+  @@index([status, nextMetricsFetchAt]) // For per-campaign metrics cron
 }
 
 model Submission {
@@ -254,11 +252,11 @@ model Submission {
   estimatedEarnings Decimal          @default(0) @db.Decimal(10, 2)
   contributionPercent Float          @default(0)
   
-  // NEW: Computed fields for backend calculations
-  viewPoints      Float            @default(0)  // views * 0.01
-  likePoints      Float            @default(0)  // likes * 0.5
-  sharePoints     Float            @default(0)  // shares * 1.0
-  totalPoints     Float            @default(0)  // sum of all points
+  // DEPRECATED: point fields no longer used (views-only system)
+  viewPoints      Float            @default(0)
+  likePoints      Float            @default(0)
+  sharePoints     Float            @default(0)
+  totalPoints     Float            @default(0)
   sharePercent    Float            @default(0)  // percentage of campaign pool (max 40%)
   
   // Status
@@ -273,7 +271,8 @@ model Submission {
   updatedAt       DateTime         @updatedAt
   lastCheckedAt   DateTime?        // Last time views were updated
   
-  @@unique([campaignId, creatorId]) // One submission per creator per campaign
+  // Multi-submission: creators can submit up to 10 videos per campaign
+  // @@unique([campaignId, creatorId]) — removed to allow multi-submission
   @@index([campaignId])
   @@index([creatorId])
   @@index([status])
@@ -290,14 +289,14 @@ model CampaignPoolStats {
   campaign              Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
   campaignId            String   @unique
 
-  // Aggregated statistics
-  totalCampaignPoints   Float    @default(0)  // Sum of all approved submission points
+  // Aggregated statistics (views-only system)
+  totalCampaignPoints   Float    @default(0)  // Total views across all approved submissions
   totalSubmissions      Int      @default(0)  // Count of approved submissions
-  averagePoints         Float    @default(0)  // Average points per submission
+  averagePoints         Float    @default(0)  // Average views per submission
 
-  // v2: Batch tracking
+  // Batch tracking
   lastBatchAt           DateTime?             // When last batch recalculation ran
-  lastBatchTotalPoints  Float    @default(0)  // Total points snapshot from last batch
+  lastBatchTotalPoints  Float    @default(0)  // Total views snapshot from last batch
 
   // Timestamps
   createdAt             DateTime @default(now())
@@ -418,18 +417,26 @@ model MusicCache {
 }
 
 model ApiCallLog {
-  id        String   @id @default(cuid())
-  endpoint  String   // e.g., "/api/campaigns", "/api/submissions"
-  method    String   // GET, POST, PUT, DELETE, etc.
-  statusCode Int?    // HTTP status code
-  userId    String?  // User who made the call (if authenticated)
-  duration  Int?     // Response time in milliseconds
-  createdAt DateTime @default(now())
-  
+  id          String   @id @default(cuid())
+  provider    String   @default("INTERNAL") // "RAPIDAPI" | "APIFY" | "INTERNAL"
+  endpoint    String   // e.g., "/api/post/detail", "/api/music/info"
+  method      String   // GET, POST, etc.
+  statusCode  Int?     // HTTP status code
+  success     Boolean  @default(true)
+  duration    Int?     // Response time in milliseconds
+  errorMessage String? @db.Text
+  context     String?  // e.g., "cron:per-campaign-metrics", "router:submitVideo", "router:fetchSongPreview"
+  campaignId  String?  // Related campaign if applicable
+  userId      String?  // User who triggered the call (if applicable)
+  isFallback  Boolean  @default(false) // True if this was a fallback call (Apify after RapidAPI failed)
+  createdAt   DateTime @default(now())
+
+  @@index([provider])
   @@index([endpoint])
-  @@index([userId])
   @@index([createdAt])
-  @@index([method])
+  @@index([success])
+  @@index([provider, createdAt])
+  @@index([context])
 }
 
 enum UserPlan {

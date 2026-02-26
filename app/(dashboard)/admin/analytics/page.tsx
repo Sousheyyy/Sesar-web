@@ -104,11 +104,10 @@ export default async function AdminAnalyticsPage({ searchParams }: AdminAnalytic
   }, 0);
 
   // ─── Batch 2: Counts + Alerts (parallelized) ──────────────────
-  const [authenticatedCreators, authenticatedArtists, pendingCampaigns, pendingTransactionsData, pendingSubmissionsCount] =
+  const [authenticatedCreators, authenticatedArtists, pendingTransactionsData, pendingSubmissionsCount] =
     await Promise.all([
       prisma.user.count({ where: { role: UserRole.CREATOR } }),
       prisma.user.count({ where: { role: UserRole.ARTIST } }),
-      prisma.campaign.count({ where: { status: CampaignStatus.PENDING_APPROVAL } }),
       prisma.transaction.aggregate({
         where: { status: "PENDING", type: { in: ["DEPOSIT", "WITHDRAWAL"] } },
         _sum: { amount: true },
@@ -250,18 +249,6 @@ export default async function AdminAnalyticsPage({ searchParams }: AdminAnalytic
     link?: string;
     linkText?: string;
   }> = [];
-
-  if (pendingCampaigns > 0) {
-    alerts.push({
-      id: "pending-campaigns",
-      type: "warning",
-      title: "Onay Bekleyen Kampanyalar",
-      message: `${pendingCampaigns} kampanya onay bekliyor`,
-      count: pendingCampaigns,
-      link: "/admin/campaigns",
-      linkText: "Kampanyaları Gör",
-    });
-  }
 
   if (pendingTransactionsData._count > 0) {
     alerts.push({

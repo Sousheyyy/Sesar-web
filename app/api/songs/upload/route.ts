@@ -10,7 +10,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
-import { apifyClient, ApifyError } from '@/lib/apify/client';
+import { tiktokService } from '@/lib/tiktok/tiktok-service';
+import { ApifyError } from '@/lib/apify/client';
 import { TikTokUrlParser, ValidationError } from '@/lib/apify/url-utils';
 import { rateLimit } from '@/lib/rate-limit';
 import { uploadImageFromUrl, STORAGE_BUCKETS } from '@/lib/supabase/storage';
@@ -125,11 +126,12 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 7. Fetch from Apify (first time or no music ID extracted)
+    // 7. Fetch from TikTok (RapidAPI primary, Apify fallback)
 
     let metadata: { title: string; authorName: string; coverImage: string; tiktokMusicId: string };
     try {
-      metadata = await apifyClient.fetchMusicMetadata(normalizedUrl);
+      const result = await tiktokService.fetchMusicMetadata(normalizedUrl, 'api:song-upload');
+      metadata = result.data;
     } catch (error) {
       if (error instanceof ApifyError) {
         return NextResponse.json(

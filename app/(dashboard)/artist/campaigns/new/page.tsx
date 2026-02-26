@@ -126,7 +126,6 @@ function NewCampaignPageContent() {
 
   const handleDateClick = (date: Date) => {
     const minStart = new Date();
-    minStart.setDate(minStart.getDate() + 3);
     minStart.setHours(0, 0, 0, 0);
 
     if (date < minStart) return;
@@ -156,7 +155,6 @@ function NewCampaignPageContent() {
   const handleQuickSelect = (days: number) => {
     const start = formData.startDate ?? (() => {
       const d = new Date();
-      d.setDate(d.getDate() + 3);
       d.setHours(0, 0, 0, 0);
       return d;
     })();
@@ -189,7 +187,7 @@ function NewCampaignPageContent() {
         throw new Error(data.error || "Kampanya oluşturulamadı");
       }
 
-      toast.success("Kampanya oluşturuldu! Yönetici onayı bekleniyor.");
+      toast.success("Kampanya oluşturuldu ve aktif!");
       router.push(`/artist/campaigns/${data.id}`);
       router.refresh();
     } catch (error: any) {

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { apifyClient } from "@/lib/apify/client";
+import { tiktokService } from "@/lib/tiktok/tiktok-service";
 import { UserRole } from "@prisma/client";
 import { updateEstimatedPayouts } from "@/lib/payout";
 
@@ -55,11 +55,13 @@ export async function POST(
       );
     }
 
-    // Fetch video metadata via Apify
+    // Fetch video metadata (RapidAPI primary, Apify fallback)
     let videoData;
     try {
-      const result = await apifyClient.fetchVideoData(submission.tiktokUrl);
-      videoData = result.video;
+      const result = await tiktokService.fetchVideoData(
+        submission.tiktokUrl, 'api:verify-submission', submission.campaignId
+      );
+      videoData = result.data;
     } catch (fetchError: any) {
       if (fetchError.message?.includes("rate limit") || fetchError.message?.includes("429")) {
         return NextResponse.json(

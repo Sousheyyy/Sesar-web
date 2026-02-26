@@ -10,11 +10,7 @@ import { cn } from "@/lib/utils";
 import Link from "next/link";
 import {
   Search,
-  Clock,
   CheckCircle,
-  XCircle,
-  Pause,
-  Ban,
   LayoutGrid,
   ChevronLeft,
   ChevronRight,
@@ -50,12 +46,8 @@ type Campaign = {
 
 type Stats = {
   total: number;
-  pending: number;
   active: number;
   completed: number;
-  cancelled: number;
-  rejected: number;
-  paused: number;
 };
 
 type SortField = "totalBudget" | "createdAt" | "submissions" | "endDate";
@@ -73,7 +65,7 @@ interface CampaignsPageClientProps {
 /* ------------------------------------------------------------------ */
 
 const STATUS_CONFIG: Record<
-  CampaignStatus,
+  string,
   {
     label: string;
     icon: React.ComponentType<{ className?: string }>;
@@ -82,13 +74,6 @@ const STATUS_CONFIG: Record<
     badgeVariant: "default" | "secondary" | "destructive" | "outline";
   }
 > = {
-  PENDING_APPROVAL: {
-    label: "Onay Bekleyen",
-    icon: Clock,
-    color: "text-yellow-500",
-    activeColor: "ring-yellow-500 border-yellow-500 bg-yellow-500/5",
-    badgeVariant: "outline",
-  },
   ACTIVE: {
     label: "Aktif",
     icon: CheckCircle,
@@ -102,27 +87,6 @@ const STATUS_CONFIG: Record<
     color: "text-blue-500",
     activeColor: "ring-blue-500 border-blue-500 bg-blue-500/5",
     badgeVariant: "secondary",
-  },
-  PAUSED: {
-    label: "Duraklatıldı",
-    icon: Pause,
-    color: "text-zinc-400",
-    activeColor: "ring-zinc-400 border-zinc-400 bg-zinc-400/5",
-    badgeVariant: "outline",
-  },
-  CANCELLED: {
-    label: "İptal Edildi",
-    icon: Ban,
-    color: "text-red-500",
-    activeColor: "ring-red-500 border-red-500 bg-red-500/5",
-    badgeVariant: "destructive",
-  },
-  REJECTED: {
-    label: "Reddedildi",
-    icon: XCircle,
-    color: "text-red-400",
-    activeColor: "ring-red-400 border-red-400 bg-red-400/5",
-    badgeVariant: "destructive",
   },
 };
 
@@ -255,12 +219,8 @@ export function CampaignsPageClient({
     status: CampaignStatus;
     count: number;
   }[] = [
-    { status: "PENDING_APPROVAL", count: stats.pending },
     { status: "ACTIVE", count: stats.active },
     { status: "COMPLETED", count: stats.completed },
-    { status: "PAUSED", count: stats.paused },
-    { status: "CANCELLED", count: stats.cancelled },
-    { status: "REJECTED", count: stats.rejected },
   ];
 
   return (
@@ -271,12 +231,12 @@ export function CampaignsPageClient({
           Kampanya Yönetimi
         </h2>
         <p className="text-muted-foreground">
-          Kampanyaları görüntüleyin, onaylayın ve yönetin
+          Kampanyaları görüntüleyin ve yönetin
         </p>
       </div>
 
       {/* Filter Boxes */}
-      <div className="grid gap-3 grid-cols-2 md:grid-cols-3 lg:grid-cols-7">
+      <div className="grid gap-3 grid-cols-2 md:grid-cols-3">
         {/* "All" box */}
         <Card
           className={cn(

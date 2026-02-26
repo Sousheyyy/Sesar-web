@@ -101,13 +101,22 @@ export class ApifyClient {
         throw new Error(`Apify run failed with status: ${run.data.status}`);
       }
 
-      // 4. Fetch results from the dataset
-      const datasetRes = await fetch(
-        `${APIFY_BASE_URL}/datasets/${run.data.defaultDatasetId}/items?format=json`,
-        {
-          headers: { 'Authorization': `Bearer ${token}` },
-        }
-      );
+      // 4. Fetch results from the dataset (with timeout)
+      const datasetController = new AbortController();
+      const datasetTimeout = setTimeout(() => datasetController.abort(), this.getTimeout());
+
+      let datasetRes: Response;
+      try {
+        datasetRes = await fetch(
+          `${APIFY_BASE_URL}/datasets/${run.data.defaultDatasetId}/items?format=json`,
+          {
+            headers: { 'Authorization': `Bearer ${token}` },
+            signal: datasetController.signal,
+          }
+        );
+      } finally {
+        clearTimeout(datasetTimeout);
+      }
 
       if (!datasetRes.ok) {
         throw new Error(`Failed to fetch Apify dataset: ${datasetRes.status}`);
@@ -229,13 +238,22 @@ export class ApifyClient {
         throw new Error(`Apify run failed with status: ${run.data.status}`);
       }
 
-      // Fetch results from dataset
-      const datasetRes = await fetch(
-        `${APIFY_BASE_URL}/datasets/${run.data.defaultDatasetId}/items?format=json`,
-        {
-          headers: { 'Authorization': `Bearer ${token}` },
-        }
-      );
+      // Fetch results from dataset (with timeout)
+      const vidDatasetController = new AbortController();
+      const vidDatasetTimeout = setTimeout(() => vidDatasetController.abort(), this.getTimeout());
+
+      let datasetRes: Response;
+      try {
+        datasetRes = await fetch(
+          `${APIFY_BASE_URL}/datasets/${run.data.defaultDatasetId}/items?format=json`,
+          {
+            headers: { 'Authorization': `Bearer ${token}` },
+            signal: vidDatasetController.signal,
+          }
+        );
+      } finally {
+        clearTimeout(vidDatasetTimeout);
+      }
 
       if (!datasetRes.ok) {
         throw new Error(`Failed to fetch Apify dataset: ${datasetRes.status}`);

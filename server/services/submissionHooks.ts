@@ -18,15 +18,12 @@ export async function onSubmissionStatsUpdate(
     submissionId: string,
     prisma: PrismaClient
 ) {
-    await CalculationService.updateSubmissionCalculations(submissionId, prisma);
-
     const submission = await prisma.submission.findUnique({
         where: { id: submissionId },
         select: { campaignId: true },
     });
 
     if (submission) {
-        // Only update aggregate totals — NO recalculateCampaignSubmissions()
         await CalculationService.updateCampaignTotalPoints(submission.campaignId, prisma);
     }
 }
@@ -39,8 +36,6 @@ export async function onSubmissionApproved(
     submissionId: string,
     prisma: PrismaClient
 ) {
-    await CalculationService.updateSubmissionCalculations(submissionId, prisma);
-
     const submission = await prisma.submission.findUnique({
         where: { id: submissionId },
         select: { campaignId: true },

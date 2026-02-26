@@ -32,6 +32,7 @@ export async function logApiCall(
     prisma.apiCallLog
       .create({
         data: {
+          provider: 'INTERNAL',
           endpoint,
           method,
           statusCode,

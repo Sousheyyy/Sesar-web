@@ -48,16 +48,8 @@ function getStatusConfig(status: string) {
   switch (status) {
     case "ACTIVE":
       return { label: "AKTİF", variant: "success" as const };
-    case "PENDING_APPROVAL":
-      return { label: "ONAY BEKLİYOR", variant: "warning" as const };
     case "COMPLETED":
       return { label: "TAMAMLANDI", variant: "secondary" as const };
-    case "PAUSED":
-      return { label: "DURAKLATILDI", variant: "warning" as const };
-    case "CANCELLED":
-      return { label: "İPTAL EDİLDİ", variant: "destructive" as const };
-    case "REJECTED":
-      return { label: "REDDEDİLDİ", variant: "destructive" as const };
     default:
       return { label: status, variant: "secondary" as const };
   }
@@ -192,7 +184,7 @@ export default async function CampaignDetailPage({
   // Insurance health
   const thresholds = CalculationService.getInsuranceThresholds(totalBudget);
   const insuranceCheck = CalculationService.checkInsuranceThresholds(
-    totalBudget, approvedCount, totalCampaignScore, totalViews
+    totalBudget, approvedCount, totalViews
   );
 
   // ROI metrics
@@ -307,9 +299,9 @@ export default async function CampaignDetailPage({
     }));
 
   const statusConfig = getStatusConfig(campaign.status);
-  const showAnalytics = ["ACTIVE", "PAUSED", "COMPLETED"].includes(campaign.status);
-  const showHealth = ["ACTIVE", "PAUSED", "COMPLETED"].includes(campaign.status);
-  const showProgress = !!start && campaign.status !== "PENDING_APPROVAL" && campaign.status !== "REJECTED";
+  const showAnalytics = ["ACTIVE", "COMPLETED"].includes(campaign.status);
+  const showHealth = ["ACTIVE", "COMPLETED"].includes(campaign.status);
+  const showProgress = !!start;
 
   // =========================================================================
   // RENDER
@@ -372,8 +364,6 @@ export default async function CampaignDetailPage({
               <span className="text-zinc-500">
                 {campaign.status === "COMPLETED"
                   ? "Kampanya tamamlandı"
-                  : campaign.status === "PAUSED"
-                  ? "Kampanya duraklatıldı"
                   : "Kampanya ilerlemesi"
                 }
               </span>
@@ -394,8 +384,6 @@ export default async function CampaignDetailPage({
                   "h-full rounded-full transition-all duration-700",
                   campaign.status === "COMPLETED"
                     ? "bg-gradient-to-r from-green-500 to-emerald-400"
-                    : campaign.status === "PAUSED"
-                    ? "bg-gradient-to-r from-yellow-500 to-amber-400"
                     : "bg-gradient-to-r from-purple-500 to-pink-500"
                 )}
                 style={{ width: `${progressPercent}%` }}
@@ -507,7 +495,7 @@ export default async function CampaignDetailPage({
                 <CampaignHealthCard
                   insurancePassed={insuranceCheck.passed}
                   submissionProgress={{ current: approvedCount, required: thresholds.minSubmissions }}
-                  pointsProgress={{ current: Math.round(totalCampaignScore), required: thresholds.minPoints }}
+                  pointsProgress={{ current: Math.round(totalCampaignScore), required: thresholds.minViews }}
                   viewsProgress={{ current: totalViews, required: thresholds.minViews }}
                   status={campaign.status}
                 />
@@ -756,13 +744,13 @@ export default async function CampaignDetailPage({
                   <div className="flex justify-between items-center">
                     <span className="text-sm text-zinc-500">Başlangıç Tarihi</span>
                     <span className="font-semibold text-zinc-300">
-                      {campaign.startDate ? formatDate(campaign.startDate) : "Onay bekleniyor"}
+                      {campaign.startDate ? formatDate(campaign.startDate) : "—"}
                     </span>
                   </div>
                   <div className="flex justify-between items-center">
                     <span className="text-sm text-zinc-500">Bitiş Tarihi</span>
                     <span className="font-semibold text-zinc-300">
-                      {campaign.endDate ? formatDate(campaign.endDate) : `${campaign.durationDays || 7} gün (onay sonrası)`}
+                      {campaign.endDate ? formatDate(campaign.endDate) : `${campaign.durationDays || 7} gün`}
                     </span>
                   </div>
                 </CardContent>
@@ -790,7 +778,7 @@ export default async function CampaignDetailPage({
                   <div className="flex justify-between items-center">
                     <span className="text-sm text-zinc-500">Min. Uygunluk Puanı</span>
                     <span className="font-semibold text-zinc-300">
-                      {CalculationService.MIN_ELIGIBLE_POINTS} tp
+                      {CalculationService.MIN_ELIGIBLE_CONTRIBUTION} tp
                     </span>
                   </div>
                   <div className="flex justify-between items-center">
@@ -877,7 +865,7 @@ export default async function CampaignDetailPage({
                   </div>
                   <div className="flex justify-between items-center">
                     <span className="text-sm text-zinc-500">Min. Puan</span>
-                    <span className="font-semibold text-zinc-300">{formatNumber(thresholds.minPoints)}</span>
+                    <span className="font-semibold text-zinc-300">{formatNumber(thresholds.minViews)}</span>
                   </div>
                   <div className="flex justify-between items-center">
                     <span className="text-sm text-zinc-500">Min. Görüntülenme</span>

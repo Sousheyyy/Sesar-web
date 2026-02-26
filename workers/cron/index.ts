@@ -5,7 +5,7 @@
 //
 // Cron schedules (configured in workers/cron/wrangler.jsonc):
 //   every 5 min    -> campaign-lifecycle
-//   0 21 * * *     -> daily-metrics (21:00 UTC = midnight Istanbul)
+//   every 15 min   -> per-campaign-metrics (24h cadence per campaign)
 
 interface Env {
   CRON_SECRET: string;
@@ -37,14 +37,14 @@ export default {
         console.log(`[Cron] campaign-lifecycle: ${res.status} ${body.substring(0, 200)}`);
       }
 
-      if (cron === "0 21 * * *") {
-        // Daily metrics refresh
-        const res = await fetch(`${env.APP_URL}/api/cron/daily-metrics`, {
+      if (cron === "*/15 * * * *") {
+        // Per-campaign metrics refresh (24h cadence per campaign)
+        const res = await fetch(`${env.APP_URL}/api/cron/per-campaign-metrics`, {
           method: "POST",
           headers,
         });
         const body = await res.text();
-        console.log(`[Cron] daily-metrics: ${res.status} ${body.substring(0, 200)}`);
+        console.log(`[Cron] per-campaign-metrics: ${res.status} ${body.substring(0, 200)}`);
       }
     } catch (error: any) {
       console.error(`[Cron] Error for ${cron}:`, error.message);

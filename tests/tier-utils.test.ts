@@ -20,44 +20,20 @@ describe('getCommissionFromBudget', () => {
     expect(getCommissionFromBudget(-1000)).toBeNull();
   });
 
-  it('returns 20% for 25k-39,999', () => {
+  it('returns flat 20% for all valid budgets', () => {
     expect(getCommissionFromBudget(25000)).toBe(20);
     expect(getCommissionFromBudget(30000)).toBe(20);
-    expect(getCommissionFromBudget(39999)).toBe(20);
+    expect(getCommissionFromBudget(40000)).toBe(20);
+    expect(getCommissionFromBudget(70000)).toBe(20);
+    expect(getCommissionFromBudget(100000)).toBe(20);
+    expect(getCommissionFromBudget(500000)).toBe(20);
+    expect(getCommissionFromBudget(1000000)).toBe(20);
   });
 
-  it('returns 15% for 40k-69,999', () => {
-    expect(getCommissionFromBudget(40000)).toBe(15);
-    expect(getCommissionFromBudget(55000)).toBe(15);
-    expect(getCommissionFromBudget(69999)).toBe(15);
-  });
-
-  it('returns 12% for 70k-99,999', () => {
-    expect(getCommissionFromBudget(70000)).toBe(12);
-    expect(getCommissionFromBudget(85000)).toBe(12);
-    expect(getCommissionFromBudget(99999)).toBe(12);
-  });
-
-  it('returns 10% for 100k+', () => {
-    expect(getCommissionFromBudget(100000)).toBe(10);
-    expect(getCommissionFromBudget(500000)).toBe(10);
-    expect(getCommissionFromBudget(1000000)).toBe(10);
-  });
-
-  it('boundary: 39999.99 is still 20%', () => {
-    expect(getCommissionFromBudget(39999.99)).toBe(20);
-  });
-
-  it('boundary: 40000 crosses to 15%', () => {
-    expect(getCommissionFromBudget(40000)).toBe(15);
-  });
-
-  it('commission decreases as budget increases', () => {
+  it('commission is same regardless of budget amount', () => {
     const budgets = [25000, 40000, 70000, 100000];
     const commissions = budgets.map(b => getCommissionFromBudget(b)!);
-    for (let i = 1; i < commissions.length; i++) {
-      expect(commissions[i]).toBeLessThan(commissions[i - 1]);
-    }
+    commissions.forEach(c => expect(c).toBe(20));
   });
 });
 
@@ -140,10 +116,10 @@ describe('getBudgetBracket', () => {
     expect(getBudgetBracket(24999)).toBeNull();
   });
 
-  it('returns correct bracket for each range', () => {
+  it('returns flat 20% commission for all brackets', () => {
     expect(getBudgetBracket(25000)?.commission).toBe(20);
-    expect(getBudgetBracket(50000)?.commission).toBe(15);
-    expect(getBudgetBracket(80000)?.commission).toBe(12);
-    expect(getBudgetBracket(200000)?.commission).toBe(10);
+    expect(getBudgetBracket(50000)?.commission).toBe(20);
+    expect(getBudgetBracket(80000)?.commission).toBe(20);
+    expect(getBudgetBracket(200000)?.commission).toBe(20);
   });
 });

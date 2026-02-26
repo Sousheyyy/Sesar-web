@@ -37,12 +37,8 @@ function getStatusConfig(status: string) {
   switch (status) {
     case "ACTIVE":
       return { label: "AKTİF", variant: "success" as const };
-    case "PENDING_APPROVAL":
-      return { label: "ONAY BEKLİYOR", variant: "warning" as const };
     case "COMPLETED":
       return { label: "TAMAMLANDI", variant: "secondary" as const };
-    case "PAUSED":
-      return { label: "DURAKLATILDI", variant: "warning" as const };
     case "CANCELLED":
       return { label: "İPTAL EDİLDİ", variant: "destructive" as const };
     case "REJECTED":

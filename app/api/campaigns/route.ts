@@ -117,8 +117,11 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Create campaign and deduct balance in a transaction
-    // startDate and endDate are null - set on admin approval
+    // Create campaign and deduct balance in a transaction (auto-approved)
+    const now = new Date();
+    const campaignEndDate = new Date(now.getTime() + durationDays * 24 * 60 * 60 * 1000);
+    const nextMetricsFetchAt = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+
     const campaign = await prisma.$transaction(async (tx) => {
       await tx.user.update({
         where: { id: session.user.id },
@@ -144,9 +147,10 @@ export async function POST(req: NextRequest) {
           totalBudget,
           remainingBudget: totalBudget,
           minVideoDuration: minVideoDuration || null,
-          startDate: null,
-          endDate: null,
-          status: "PENDING_APPROVAL",
+          startDate: now,
+          endDate: campaignEndDate,
+          nextMetricsFetchAt: nextMetricsFetchAt,
+          status: "ACTIVE",
           durationDays,
           commissionPercent,
         },
@@ -155,6 +159,10 @@ export async function POST(req: NextRequest) {
         },
       });
     });
+
+    // Initialize campaign calculations
+    const { onCampaignCreated } = await import("@/server/services/submissionHooks");
+    await onCampaignCreated(campaign.id, prisma);
 
     const response = NextResponse.json(campaign, { status: 201 });
     logApiCallSimple(

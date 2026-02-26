@@ -50,22 +50,19 @@ export async function POST(
             );
         }
 
-        // Check if user already submitted to this campaign
-        const existingSubmission = await prisma.submission.findUnique({
+        // Check max submissions per creator (multi-submission: max 10)
+        const existingCount = await prisma.submission.count({
             where: {
-                campaignId_creatorId: {
-                    campaignId: id,
-                    creatorId: session.user.id,
-                },
+                campaignId: id,
+                creatorId: session.user.id,
             },
         });
 
-        if (existingSubmission) {
+        if (existingCount >= 10) {
             return NextResponse.json(
                 {
-                    error: 'Already submitted',
-                    message: 'You have already submitted a video to this campaign',
-                    submission: existingSubmission,
+                    error: 'Max submissions reached',
+                    message: 'You can submit up to 10 videos per campaign',
                 },
                 { status: 409 }
             );

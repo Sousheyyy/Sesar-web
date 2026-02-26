@@ -23,7 +23,6 @@ import {
   Upload,
   ListMusic,
   FolderOpen,
-  AlertCircle,
   Heart,
   MessageCircle,
   Share2,
@@ -38,12 +37,8 @@ function getStatusConfig(status: string) {
   switch (status) {
     case "ACTIVE":
       return { label: "AKTİF", variant: "success" as const };
-    case "PENDING_APPROVAL":
-      return { label: "BEKLIYOR", variant: "warning" as const };
     case "COMPLETED":
       return { label: "TAMAMLANDI", variant: "secondary" as const };
-    case "PAUSED":
-      return { label: "DURAKLATILDI", variant: "warning" as const };
     case "CANCELLED":
       return { label: "İPTAL", variant: "destructive" as const };
     case "REJECTED":
@@ -148,7 +143,6 @@ export default async function ArtistDashboardPage() {
   for (const row of campaignStatusCounts) statusMap[row.status] = row._count;
 
   const activeCampaignsCount = statusMap["ACTIVE"] ?? 0;
-  const pendingCampaignsCount = statusMap["PENDING_APPROVAL"] ?? 0;
   const totalCampaignsCount = campaignStatusCounts.reduce((s, r) => s + r._count, 0);
 
   const metrics = {
@@ -189,34 +183,6 @@ export default async function ArtistDashboardPage() {
         </Link>
       </div>
 
-      {/* ================================================================= */}
-      {/* PENDING ALERT (conditional)                                       */}
-      {/* ================================================================= */}
-      {pendingCampaignsCount > 0 && (
-        <div className="flex items-center gap-3 p-4 rounded-xl bg-yellow-500/10 border border-yellow-500/20 backdrop-blur-md">
-          <AlertCircle className="h-5 w-5 text-yellow-400 shrink-0" />
-          <div className="flex-1">
-            <p className="text-sm font-medium text-yellow-300">
-              {pendingCampaignsCount} kampanya onay bekliyor
-            </p>
-            <p className="text-xs text-yellow-400/70">
-              Admin onayından sonra kampanyalarınız aktif olacaktır.
-            </p>
-          </div>
-          <Link href="/artist/campaigns">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="text-yellow-400 hover:text-yellow-300 hover:bg-yellow-500/10"
-            >
-              Görüntüle
-              <ArrowRight className="ml-1 h-3 w-3" />
-            </Button>
-          </Link>
-        </div>
-      )}
-
-      {/* ================================================================= */}
       {/* KPI METRIC CARDS                                                  */}
       {/* ================================================================= */}
       <div className="grid gap-4 grid-cols-2 lg:grid-cols-5">

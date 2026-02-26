@@ -163,8 +163,6 @@ const STATUS_BADGES: Record<
   REJECTED: { variant: "destructive", label: "Reddedildi" },
   ACTIVE: { variant: "default", label: "Aktif" },
   COMPLETED: { variant: "secondary", label: "Tamamlandı" },
-  PENDING_APPROVAL: { variant: "outline", label: "Onay Bekliyor" },
-  PAUSED: { variant: "outline", label: "Duraklatıldı" },
   CANCELLED: { variant: "destructive", label: "İptal Edildi" },
 };
 

@@ -30,6 +30,7 @@ import {
   Send,
   Settings,
   LogOut,
+  Activity,
 } from "lucide-react";
 import { UserRole } from "@prisma/client";
 import { toast } from "sonner";
@@ -46,6 +47,7 @@ const navigation = {
     { name: "Kampanyalar", href: "/admin/campaigns", icon: Music2 },
     { name: "İşlemler", href: "/admin/transactions", icon: FileText },
     { name: "Banka", href: "/admin/bank", icon: Landmark },
+    { name: "İzleme", href: "/admin/monitoring", icon: Activity },
     { name: "Ayarlar", href: "/admin/settings", icon: Settings },
     { name: "Profil", href: "/profile", icon: User },
   ],

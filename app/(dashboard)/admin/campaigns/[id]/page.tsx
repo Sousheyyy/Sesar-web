@@ -38,7 +38,6 @@ import {
 } from "lucide-react";
 import { TLIcon } from "@/components/icons/tl-icon";
 import { MetricCard } from "@/components/analytics/metric-card";
-import { CampaignApprovalSection } from "@/components/admin/campaign-approval-section";
 import { AdminCampaignHeaderActions } from "@/components/admin/admin-header-actions";
 import { FinishCampaignButton } from "@/components/admin/finish-campaign-button";
 import { SubmissionsTable } from "@/components/submissions/submissions-table";
@@ -65,16 +64,8 @@ function getStatusConfig(status: string) {
   switch (status) {
     case "ACTIVE":
       return { label: "AKTİF", variant: "success" as const };
-    case "PENDING_APPROVAL":
-      return { label: "ONAY BEKLİYOR", variant: "warning" as const };
     case "COMPLETED":
       return { label: "TAMAMLANDI", variant: "secondary" as const };
-    case "PAUSED":
-      return { label: "DURAKLATILDI", variant: "warning" as const };
-    case "CANCELLED":
-      return { label: "İPTAL EDİLDİ", variant: "destructive" as const };
-    case "REJECTED":
-      return { label: "REDDEDİLDİ", variant: "destructive" as const };
     default:
       return { label: status, variant: "secondary" as const };
   }
@@ -267,7 +258,6 @@ export default async function AdminCampaignDetailPage({
   const insuranceCheck = CalculationService.checkInsuranceThresholds(
     totalBudget,
     approvedCount,
-    totalCampaignScore,
     totalViews
   );
 
@@ -351,17 +341,13 @@ export default async function AdminCampaignDetailPage({
     }));
 
   const statusConfig = getStatusConfig(campaign.status);
-  const showAnalytics = ["ACTIVE", "PAUSED", "COMPLETED"].includes(
+  const showAnalytics = ["ACTIVE", "COMPLETED"].includes(
     campaign.status
   );
-  const showHealth = ["ACTIVE", "PAUSED", "COMPLETED"].includes(
+  const showHealth = ["ACTIVE", "COMPLETED"].includes(
     campaign.status
   );
-  const showProgress =
-    !!start &&
-    campaign.status !== "PENDING_APPROVAL" &&
-    campaign.status !== "REJECTED";
-  const isPending = campaign.status === "PENDING_APPROVAL";
+  const showProgress = !!start;
 
   // Budget chart segments
   const budgetSegments = [
@@ -465,9 +451,7 @@ export default async function AdminCampaignDetailPage({
               <span className="text-zinc-500">
                 {campaign.status === "COMPLETED"
                   ? "Kampanya tamamlandı"
-                  : campaign.status === "PAUSED"
-                    ? "Kampanya duraklatıldı"
-                    : "Kampanya ilerlemesi"}
+                  : "Kampanya ilerlemesi"}
               </span>
               <span className="text-zinc-400 font-medium">
                 {campaign.status === "COMPLETED"
@@ -485,9 +469,7 @@ export default async function AdminCampaignDetailPage({
                   "h-full rounded-full transition-all duration-700",
                   campaign.status === "COMPLETED"
                     ? "bg-gradient-to-r from-green-500 to-emerald-400"
-                    : campaign.status === "PAUSED"
-                      ? "bg-gradient-to-r from-yellow-500 to-amber-400"
-                      : "bg-gradient-to-r from-purple-500 to-pink-500"
+                    : "bg-gradient-to-r from-purple-500 to-pink-500"
                 )}
                 style={{ width: `${progressPercent}%` }}
               />
@@ -495,21 +477,6 @@ export default async function AdminCampaignDetailPage({
           </div>
         )}
       </div>
-
-      {/* ================================================================= */}
-      {/* APPROVAL PANEL (PENDING ONLY)                                     */}
-      {/* ================================================================= */}
-      {isPending && (
-        <CampaignApprovalSection
-          campaignId={campaign.id}
-          totalBudget={totalBudget}
-          commissionPercent={commissionPercent}
-          status={campaign.status}
-          desiredStartDate={
-            campaign.desiredStartDate?.toISOString() ?? null
-          }
-        />
-      )}
 
       {/* ================================================================= */}
       {/* KPI CARDS                                                         */}
@@ -639,7 +606,7 @@ export default async function AdminCampaignDetailPage({
                   }}
                   pointsProgress={{
                     current: Math.round(totalCampaignScore),
-                    required: thresholds.minPoints,
+                    required: thresholds.minViews,
                   }}
                   viewsProgress={{
                     current: totalViews,
@@ -1259,7 +1226,7 @@ export default async function AdminCampaignDetailPage({
                       Min. Uygunluk Puanı
                     </span>
                     <span className="font-semibold text-zinc-300">
-                      {CalculationService.MIN_ELIGIBLE_POINTS} tp
+                      {CalculationService.MIN_ELIGIBLE_CONTRIBUTION} tp
                     </span>
                   </div>
                   <div className="flex justify-between items-center">
@@ -1300,19 +1267,6 @@ export default async function AdminCampaignDetailPage({
                       {campaign.insuranceTriggered ? "Evet" : "Hayır"}
                     </span>
                   </div>
-                  {campaign.rejectionReason && (
-                    <>
-                      <Separator className="bg-white/5" />
-                      <div>
-                        <span className="text-sm text-zinc-500">
-                          Red Nedeni
-                        </span>
-                        <p className="text-sm text-red-400 mt-1">
-                          {campaign.rejectionReason}
-                        </p>
-                      </div>
-                    </>
-                  )}
                 </CardContent>
               </Card>
 
@@ -1348,7 +1302,7 @@ export default async function AdminCampaignDetailPage({
                     <span className="font-semibold text-zinc-300">
                       {campaign.startDate
                         ? formatDate(campaign.startDate)
-                        : "Onay bekleniyor"}
+                        : "—"}
                     </span>
                   </div>
                   <div className="flex justify-between items-center">
@@ -1356,7 +1310,7 @@ export default async function AdminCampaignDetailPage({
                     <span className="font-semibold text-zinc-300">
                       {campaign.endDate
                         ? formatDate(campaign.endDate)
-                        : `${campaign.durationDays || 7} gün (onay sonrası)`}
+                        : "—"}
                     </span>
                   </div>
                   {campaign.lockedAt && (
@@ -1483,13 +1437,13 @@ export default async function AdminCampaignDetailPage({
                     <span
                       className={cn(
                         "font-semibold",
-                        totalCampaignScore >= thresholds.minPoints
+                        totalCampaignScore >= thresholds.minViews
                           ? "text-green-400"
                           : "text-red-400"
                       )}
                     >
                       {formatNumber(Math.round(totalCampaignScore))}/
-                      {formatNumber(thresholds.minPoints)}
+                      {formatNumber(thresholds.minViews)}
                     </span>
                   </div>
                   <div className="flex justify-between items-center">

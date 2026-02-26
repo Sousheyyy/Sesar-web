@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils";
-import { Check, Clock, Lock, Flag, Plus, Pause, XCircle } from "lucide-react";
+import { Check, Clock, Lock, Flag, Plus, XCircle } from "lucide-react";
 
 interface CampaignTimelineProps {
   createdAt: Date;
@@ -82,19 +82,14 @@ export function CampaignTimeline({
       icon: <Lock className="h-3.5 w-3.5" />,
       status: lockedAt ? "completed" :
               status === "COMPLETED" ? "completed" :
-              (status === "ACTIVE" || status === "PAUSED") ? "upcoming" : "upcoming",
+              status === "ACTIVE" ? "upcoming" : "upcoming",
     },
     {
-      label: status === "CANCELLED" ? "İptal Edildi" :
-             status === "PAUSED" ? "Duraklatıldı" :
-             "Tamamlandı",
+      label: status === "CANCELLED" ? "İptal Edildi" : "Tamamlandı",
       date: completedAt || (status === "CANCELLED" ? new Date() : null),
-      icon: status === "CANCELLED" ? <XCircle className="h-3.5 w-3.5" /> :
-            status === "PAUSED" ? <Pause className="h-3.5 w-3.5" /> :
-            <Check className="h-3.5 w-3.5" />,
+      icon: status === "CANCELLED" ? <XCircle className="h-3.5 w-3.5" /> : <Check className="h-3.5 w-3.5" />,
       status: completedAt ? "completed" :
               status === "ACTIVE" ? "active" :
-              status === "PAUSED" ? "active" :
               status === "CANCELLED" ? "completed" : "upcoming",
     },
   ];

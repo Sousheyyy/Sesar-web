@@ -25,19 +25,11 @@ interface TopCampaignsTableProps {
 const STATUS_LABELS: Record<CampaignStatus, string> = {
   ACTIVE: "Aktif",
   COMPLETED: "Tamamlandı",
-  PENDING_APPROVAL: "Onay Bekliyor",
-  PAUSED: "Duraklatıldı",
-  CANCELLED: "İptal Edildi",
-  REJECTED: "Reddedildi",
 };
 
 const STATUS_COLORS: Record<CampaignStatus, string> = {
   ACTIVE: "bg-green-500/20 text-green-300 border-green-500/30",
   COMPLETED: "bg-blue-500/20 text-blue-300 border-blue-500/30",
-  PENDING_APPROVAL: "bg-yellow-500/20 text-yellow-300 border-yellow-500/30",
-  PAUSED: "bg-zinc-500/20 text-zinc-300 border-zinc-500/30",
-  CANCELLED: "bg-red-500/20 text-red-300 border-red-500/30",
-  REJECTED: "bg-red-500/20 text-red-300 border-red-500/30",
 };
 
 export const TopCampaignsTable = memo(function TopCampaignsTable({
